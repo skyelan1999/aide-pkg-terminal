@@ -1,0 +1,17 @@
+{
+  "id": "terminal",
+  "name": "终端",
+  "description": "DSH terminal 能力预设：终端会话与命令执行",
+  "version": "1.0.0",
+  "author": "aide",
+  "main": "index.js",
+  "enabled": true,
+  "installedAt": "2026-09-21T18:00:34Z",
+  "settingsSchema":   {
+    "type": "object",
+    "title": "插件参数",
+    "description": "此插件暂未声明专属选项。可在扩展参数中添加插件会读取的设置，也可切换到文本模式直接编辑 JSON。",
+    "properties": {},
+    "additionalProperties": true
+  }
+}
