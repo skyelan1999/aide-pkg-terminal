@@ -1,34 +1,65 @@
-# Terminal · Aide 命令提案与目录工具
+# Terminal · Aide 设备终端工作台
 
-Aide `terminal` 插件的独立分发仓库，版本 **1.0.0**，MIT 许可。原始源码来自 [Aide f795a240](https://github.com/skyelan1999/aide/tree/f795a240cdb37e9b92a37d91664bd1bb3053b809/plugins/terminal)。
+**1.1.0 预发布，稳定市场仍为 1.0.0。** 基于原有命令提案插件增加独立工作台、常驻本地/SSH 会话与输出日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
 
-## 实际能力
+## 安装预发布版
 
-| 工具 | 参数 | 行为 |
-| --- | --- | --- |
-| `terminal-run` | `command` | 返回命令提案，等待用户在 Aide 中审阅和手动运行；插件不自动执行 shell |
-| `terminal-history` | `path`，默认 `.` | 只读列出当前绑定工作区内的目录内容，子目录名称带 `/` |
+从 [v1.1.0 预发布](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.1.0) 说明中的固定提交链接下载 ZIP 和 SHA256SUMS，经 `sha256sum -c SHA256SUMS` 校验后导入。安装包托管在仓库 `packages/v1.1.0/`，Release 提供下载链接，没有另行上传二进制附件。请先采用配套宿主源码构建；当前公开旧宿主不能完整使用此工作台。
 
-两个工具都有 handler。`terminal-history` 名称沿用原插件，它列举的是目录，不是历史命令。插件不提供交互式终端、PTY、终端会话或命令历史存储。`terminal-panel` 只是槽位声明，Aide v1 宿主不渲染通用 UI 槽位。
+![设备调试工作台](docs/screenshots/workbench.png)
 
-例如，在已配置可用模型的 Aide 中，可要求使用 `terminal-run` 准备一条命令，或用 `terminal-history` 查看当前目录；产生提案不等于命令已运行。目录访问通过宿主的工作区 API，拒绝 `..` 越界和指向工作区外的符号链接。
+## 使用
 
-## 安装
+在配套 Aide 中启用 Terminal，点击“打开工作台”或“新标签页打开”，选择“新建会话”。本地 Shell 在 **Aide 运行环境**的当前工作区启动；远程 SSH 由该环境的 OpenSSH 客户端连接设备。可以同时调试不同设备，切换标签或关闭工作台不会结束后台会话。点击“结束”并确认才结束连接，保留原有日志；已结束的会话可以明确删除记录和日志。
 
-需要支持插件导入的 Aide，市场兼容基线为 `0.1.17.0 RC2`，以及宿主 Node.js 插件运行环境。没有 npm 依赖。
+SSH 首次连接在终端显示主机指纹，请通过可信途径核对后输入 `yes`。指纹变化由 OpenSSH 拒绝连接；本插件不会自动忽略校验。用户名、地址、端口和可选的工作区相对私钥路径保存在会话记录中；密码和私钥口令只在 SSH 提示后交互输入，没有密码输入框或凭据保存功能。可使用 Aide 运行用户的默认 SSH 私钥，或选择工作区内私钥文件。没有启用 agent 转发、端口转发，也不会读取用户 SSH config 的 ProxyCommand。
 
-从 [Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.0.0) 说明中的固定提交链接下载 `aide-pkg-terminal-v1.0.0.zip` 和 `SHA256SUMS`，核对摘要后通过 Aide 插件管理导入；也可在[官方插件市场](https://skyelan1999.github.io/aide-pkg-shop/)搜索 `terminal`。
+工作台提供会话列表与标签、xterm 终端、窗口尺寸适配、Ctrl+C、输出查找、日志开关与下载。命令和按键直接发送到目标会话，请确认当前标签对应的设备。关闭面板不会自动发送尚未送达的输入，也不会重试结果不确定的写操作。
+
+## 后台生命周期与数据
+
+“驻留”指 **Aide 与插件后台持续运行期间**，浏览器关闭、刷新或切换面板后会话继续运行。停用/重启插件、升级插件或停止 Aide 会结束连接。重新启动后台会恢复会话记录及日志，将未正常结束的记录标记为“后台已重启”，不会自动重连或重放设备命令。断线不会自动重新认证；请新建会话。
+
+每个工作区独立保存数据至 `.aide/terminal-workbench/`，不放入插件安装目录，因此替换插件文件不会覆盖日志。目录权限 `0700`，文件权限 `0600`。请把这个目录加入项目的 Git 忽略规则；备份或清理工作区时按需保留它。
+
+- 每个会话最多保留 **4 × 2 MiB** 原始输出日志，达到上限自动覆盖最旧分卷；每个工作区最多32条会话记录，整个插件后台最多16个运行会话。删除已结束记录可以释放名额和对应日志。
+- 日志只捕获 PTY **输出**，不单独存储键盘输入；OpenSSH 的密码提示关闭回显。设备或应用自行回显的命令、口令及其他敏感内容仍会被记录，必要时先暂停日志。
+- 日志保留 ANSI 控制序列，文件名是会话 ID，开始/结束时间在同名 JSON 元数据中。无需打开工作台，后台仍会记录输出。磁盘写入失败时工作台显示错误，已有内存输出仍可查看；检查存储后重新开启日志即可重试后续写入。
+- 输出回放保留最近512 KiB，超出会明确提示恢复的是尾部；磁盘日志独立保留。查看日志可选择单个分卷准备下载，然后点击 **Aide 顶部“保存文件”**。下载固定文件身份和起始大小；读取期间发生轮转则报错，不会混合不同文件。
+
+## 运行要求与兼容性
+
+Node.js 24、Python 3 标准库 PTY、`/bin/bash` 和 OpenSSH 客户端。安装包没有 npm 运行依赖，终端 JS/CSS 内嵌、无需 CDN。当前在 **Linux 原生运行环境**实际验证；Windows 用户可通过 Aide Linux 容器使用，终端执行的是容器 Shell。Windows 原生 PTY 未实现，macOS 未实测；这不代表 Windows PowerShell、宿主机终端或设备串口支持。
+
+1.1.0 需要 Aide 同时支持工作台 `bridge.renew` 和 `daemon.detach` 能力（配套 [Aide 宿主变更](https://github.com/skyelan1999/aide/tree/codex/terminal-workbench)）。旧宿主可以识别工作台声明，但此版本会禁用会话创建并提示升级，避免旧桥接128次调用上限或取消请求导致后台停止。**不能只把新插件装入旧版 Aide 后宣称完整支持。**
+
+插件是可信 Node 代码，不是权限沙箱；交互 Shell 和 SSH 具有 Aide 运行用户的系统权限。工作区边界用于起始目录、私钥路径和会话归属，不限制 Shell 后续能访问的路径。`read-only` 宿主策略会拒绝调用这些插件工具。锁屏、工作区切换、插件停用仍按宿主策略撤销当前面板权限；取消正在执行的工具时宿主可能结束对应后台实例，以防未确认的后续副作用。
+
+## 工具兼容
+
+保留 `terminal-run(command)` 的命令提案行为与 `terminal-history(path)` 的只读目录列举行为，没有将旧提案工具改成直接执行。新增 `terminal_session_list/create/input/poll/resize/close/logging/logs/delete` 工具供受控工作台调用；创建和输入会直接执行，模型调用时同样需要用户的明确意图与授权。
+
+## 开发与验证
 
 ```sh
-sha256sum -c SHA256SUMS
+npm ci --ignore-scripts
+npm run build
+npm test
 ```
 
-安装 ZIP 与既有市场 1.0.0 包逐字节一致，根目录包含 `index.js`、`manifest.json`、`LICENSE`。已有同 ID、同版本的插件无需重复安装。
+构建时固定 xterm.js 5.5.0、fit 0.10.0、search 0.15.0；运行包不包含 `node_modules`。第三方 MIT 许可证保存在 `vendor/`，Aide 工作台客户端保留原始 MIT 许可证。
 
-## 分发与验证
+真实浏览器验收需要 Chromium 和已启动的隔离候选 Aide：
 
-安装 ZIP 与摘要由仓库 `packages/v1.0.0/` 目录托管；Release 说明提供固定提交链接，不额外上传附件。市场分发相同字节的包。
+```sh
+AIDE_TEST_URL=https://127.0.0.1:8098 \
+AIDE_TEST_DATA=/path/to/isolated/data \
+AIDE_EVIDENCE_DIR=/path/to/evidence \
+node test/browser-workbench.cjs
+```
 
-发布验证包含 Node 语法、ZIP 完整性和摘要、实际安装包的宿主入口与 surface，以及通过真实宿主调用验证命令只生成提案、目录列举、目录穿越与外部符号链接拒绝。没有调用付费模型或实际运行提案命令。
+测试仅启动回环 SSH 模拟设备，不连接实际设备，不调用模型；会创建并结束自己的测试会话、保留日志，不应指向生产实例。浏览器验收覆盖本地/SSH、后台保留、刷新恢复、超过128次真实调用的续期、日志下载、明暗主题、窄屏与明确结束。测试环境的精确结果及未验证范围见 Aide `docs/tasks/terminal-workbench-20261020.json`。
 
-插件通过可信 Node 宿主运行，插件机制不是权限沙箱。SHA-256 用于完整性校验，不是发布者签名。
+## 已发布旧版
+
+[1.0.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.0.0) 和 `packages/v1.0.0/` 中的归档保持不变。1.0.0 仅提供命令提案与目录工具，没有本工作台能力。[插件市场](https://skyelan1999.github.io/aide-pkg-shop/) 当前仍分发旧版，1.1.0 以 GitHub 预发布单独提供，尚未替换稳定市场。

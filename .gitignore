@@ -1,1 +1,7 @@
 dist/
+node_modules/
+__pycache__/
+.agent-state/
+
+# Terminal workbench session data and private device logs.
+/.aide/terminal-workbench/

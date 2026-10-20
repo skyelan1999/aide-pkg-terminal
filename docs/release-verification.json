@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "zipSHA256": "e417db91e86caf0a6a926de976d9dd2901c81725acbb5d10229c2b570a97b87b",
+  "zipBytes": 100397,
+  "hostEntry": "PASS",
+  "surfaceTools": 11,
+  "runtimeEqualsHost": true,
+  "pluginTests": "6 PASS",
+  "hostBranch": "codex/terminal-workbench",
+  "compatibility": "requires bridge.renew and daemon.detach; stable market stays 1.0.0"
+}
