@@ -29,7 +29,7 @@ module.exports = {
     add('terminal_session_visibility','仅工作台用户可修改会话对 Aide 的可见性',run('visibility'),{...id,visible:{type:'boolean'}},['id','visible']);
     add('terminal_session_relay_script','仅工作台用户可下载包含密钥的设备侧中继 Python 脚本',run('relayScript'),id,['id']);
     add('terminal_session_relay_status','检测可见会话的加密中继是否在线，不打开目标设备',run('relayStatus'),id,['id']);
-    add('terminal_session_relay_connect','明确连接已配置的可见中继会话',run('relayConnect'),{...id,identityFile:{type:'string'},identitySource:{type:'string'}},['id']);
+    add('terminal_session_relay_connect','按保存的配置连接或重新连接已有会话（包括中继）；仅在用户明确要求时调用，保留记录与日志',run('reconnect'),{...id,identityFile:{type:'string'},identitySource:{type:'string'}},['id']);
     const definitions=require('./communications').definitions();
     add('terminal_session_comm','调用当前工作区内的通信工具；连接、发送、回放、代理和模拟服务仅在用户明确授权时调用',run('commCall'),{action:{type:'string',enum:[...definitions.map(d=>d.name.replace(/^terminal_/,'')),'ssh_fingerprint']},arguments:{type:'object'}} ,['action']);
     for(const definition of definitions){const action=definition.name.replace(/^terminal_/,'');ctx.tool({...definition,handler:(args,api)=>run('commCall')({action,arguments:args},api)});}

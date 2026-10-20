@@ -3,7 +3,7 @@
   const $ = id => document.getElementById(id), bridge = AideWorkbenchClient.create('terminal');
   const panes = new Map(), pendingInput = new Map();
   let sessionFilter = 'all', workspaceMode = 'local';
-  let sessions = [], selected = null, queue = Promise.resolve(), polling = false, paused = true, connected = false, stopped = false, exportId = 0, relayConnecting = false;
+  let sessions = [], selected = null, queue = Promise.resolve(), polling = false, paused = true, connected = false, stopped = false, exportId = 0, relayConnecting = false, sessionReconnecting = false;
   let pollTimer = null, pollRequested = false, interactiveUntil = 0;
   function schedulePoll(delay = 0) {
     clearTimeout(pollTimer);pollTimer=null;
@@ -106,6 +106,9 @@
     $('empty').hidden=!!rec;
     for(const id of ['new-top','new-empty','new-session'])$(id).disabled=!connected;
     for(const id of ['find','logs','logging'])$(id).disabled=!rec;
+    $('reconnect-session').disabled=!rec||!connected||paused||running||rec.status==='starting'||sessionReconnecting||relayConnecting||rec.reconnectable===false;
+    $('reconnect-session').textContent=sessionReconnecting?'正在连接…':'重新连接';
+    $('reconnect-session').title=rec?.reconnectable===false?'TCP 接入连接需由设备重新接入对应监听':'沿用原配置重新连接，保留历史日志';
     $('interrupt').disabled=!running;$('close-session').disabled=!running;$('delete-session').disabled=!rec||running||rec.status==='starting';
     $('connection').textContent=rec?endpoint(rec):'Shell / SSH / TCP / UDP / 串口';
     $('communication-send').hidden=!communication(rec);$('send-packet').disabled=!running||paused||rec?.kind==='tcp-server';$('interrupt').disabled=!running||communication(rec);
@@ -202,6 +205,13 @@
   };
   $('create-form').onkeydown=event=>{if(event.key==='Enter'&&event.target.tagName==='INPUT'&&event.target.type!=='checkbox'){event.preventDefault();$('create-submit').click();}};
   $('interrupt').onclick=()=>{if(selected)enqueue('input',{id:selected,data:'\x03'}).catch(fail);};
+  $('reconnect-session').onclick=async()=>{
+    const rec=current();if(!rec||sessionReconnecting||rec.status==='running'||rec.status==='starting'||rec.reconnectable===false)return;
+    sessionReconnecting=true;const pending=pendingInput.get(rec.id);if(pending){clearTimeout(pending.timer);pending.timer=null;pending.text='';}render();
+    try{const result=await enqueue('relay_connect',{id:rec.id});Object.assign(rec,result.session);select(rec.id);schedulePoll();}
+    catch(error){message('重新连接失败：'+error.message);await poll();}
+    finally{sessionReconnecting=false;render();}
+  };
   $('close-session').onclick=async()=>{
     const rec=current();if(!rec||!(await confirmAction('结束“'+rec.name+'”的连接？正在运行的设备命令可能中断，日志会保留。')))return;
     try{const pending=pendingInput.get(rec.id);if(pending){clearTimeout(pending.timer);pending.timer=null;pending.text='';}await enqueue('close',{id:rec.id});await poll();}catch(error){fail(error);}
@@ -215,7 +225,7 @@
   $('relay-probe').onclick=async()=>{const rec=current();if(!rec?.relayEnabled)return;$('relay-probe').disabled=true;try{const result=await enqueue('relay_status',{id:rec.id});Object.assign(rec,result.session);render();}catch(error){fail(error);}finally{$('relay-probe').disabled=false;}};
   $('relay-connect').onclick=async()=>{const rec=current();if(!rec?.relayEnabled||relayConnecting)return;relayConnecting=true;$('relay-connect').disabled=true;try{const result=await enqueue('relay_connect',{id:rec.id,identityFile:rec.identityFile,identitySource:rec.identitySource});Object.assign(rec,result.session);select(rec.id);}catch(error){message('中继连接失败：'+error.message);}finally{relayConnecting=false;render();}};
   $('relay-script').onclick=async()=>{const rec=current();if(!rec?.relayEnabled)return;try{const result=await enqueue('relay_script',{id:rec.id});const output=bytes(result.data);window.parent.postMessage({type:'aide.workbench.export',protocol:1,pluginId:'terminal',requestId:'export_'+(++exportId),name:result.name,bytes:output.buffer},'*',[output.buffer]);}catch(error){fail(error);}};
-  setInterval(()=>{if(current()?.relayEnabled&&!sessions.some(rec=>rec.status==='running')&&!paused&&!$('relay-probe').disabled)$('relay-probe').click();},15000);
+  setInterval(()=>{if(current()?.relayEnabled&&!sessionReconnecting&&!relayConnecting&&!sessions.some(rec=>rec.status==='running')&&!paused&&!$('relay-probe').disabled)$('relay-probe').click();},15000);
   $('logging').onclick=async()=>{const rec=current();if(!rec)return;try{const result=await enqueue('logging',{id:rec.id,enabled:!rec.logging});Object.assign(rec,result.session);render();}catch(error){fail(error);}};
   $('find').onclick=()=>{$('search-bar').hidden=false;$('search-input').focus();fitSelected();};
   $('search-close').onclick=()=>{$('search-bar').hidden=true;panes.get(selected)?.search.clearDecorations();fitSelected();};

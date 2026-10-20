@@ -21,8 +21,8 @@ async function port(){const s=net.createServer();await new Promise(r=>s.listen(0
    if(relay)args.relay={enabled:true,host:'127.0.0.1',port:await port()};
    const rec=(await m.create(ui,args)).session;
    if(relay){const script=m.relayScript(ui,{id:rec.id}),file=path.join(root,'agent.py');fs.writeFileSync(file,Buffer.from(script.data,'base64'),{mode:0o600});agent=spawn('python3',[file],{stdio:['ignore','pipe','pipe']});let err='';agent.stderr.on('data',d=>err+=d);await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('agent timeout '+err)),8000);agent.stdout.once('data',()=>{clearTimeout(timer);resolve();});agent.once('exit',()=>{clearTimeout(timer);reject(Error('agent exit '+err));});});await m.relayConnect(ui,{id:rec.id});}
-   const page=await browser.newPage({viewport:{width:1440,height:960}});page.on('pageerror',e=>errors.push(e.message));let inFlight=0,maxInFlight=0,calls=0,probes=0,dropAck=false;
-   await page.exposeFunction('terminalCall',async(tool,args)=>{inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);calls++;if(tool.endsWith('_relay_status'))probes++;try{assert.equal(inFlight,1,'single-flight bridge contract');await wait(12);const action=tool.replace('terminal_session_',''),method={input:'send',delete:'remove',comm:'commCall',relay_script:'relayScript',relay_connect:'relayConnect',relay_status:'relayStatus'}[action]||action;const result=await m[method](ui,args);if(action==='input'&&dropAck){dropAck=false;throw Error('Fixture reply lost after accepted input');}return{status:'result',result};}finally{inFlight--;}});
+   const page=await browser.newPage({viewport:{width:1440,height:960}});page.on('pageerror',e=>errors.push(e.message));let inFlight=0,maxInFlight=0,calls=0,probes=0,probesWhileActive=0,dropAck=false;
+   await page.exposeFunction('terminalCall',async(tool,args)=>{inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);calls++;if(tool.endsWith('_relay_status')){probes++;if(m.list(ui).sessions.some(s=>s.status==='running'))probesWhileActive++;}try{assert.equal(inFlight,1,'single-flight bridge contract');await wait(12);const action=tool.replace('terminal_session_',''),method={input:'send',delete:'remove',comm:'commCall',relay_script:'relayScript',relay_connect:typeof m.reconnect==='function'?'reconnect':'relayConnect',relay_status:'relayStatus'}[action]||action;const result=await m[method](ui,args);if(action==='input'&&dropAck){dropAck=false;throw Error('Fixture reply lost after accepted input');}return{status:'result',result};}finally{inFlight--;}});
    await page.exposeFunction('dropNextAck',()=>{dropAck=true;});
    await page.addInitScript(accelerate=>{if(accelerate){const interval=window.setInterval.bind(window);window.setInterval=(fn,delay,...args)=>interval(fn,delay===15000?500:delay,...args);}window.fixtureClient={connect:async()=>({capabilities:['bridge.renew','daemon.detach']}),onEvent(){},close(){},call:(tool,args)=>window.terminalCall(tool,args)};},!process.env.LATENCY_BASELINE);
    let html=process.env.LATENCY_BASELINE?execFileSync('git',['show','31f67f4:workbench.html'],{cwd:path.join(__dirname,'..'),maxBuffer:4*1024*1024,encoding:'utf8'}):fs.readFileSync(path.join(__dirname,'../workbench.html'),'utf8');
@@ -32,22 +32,32 @@ async function port(){const s=net.createServer();await new Promise(r=>s.listen(0
    const text=()=>page.evaluate(()=>{const t=window.latencyTerminal,b=t.buffer.active;return Array.from({length:b.length},(_,i)=>b.getLine(i).translateToString()).join('\n');});
    async function until(pattern){for(let i=0;i<300;i++){if(pattern.test(await text()))return;await wait(20);}throw Error('SSH handshake timeout '+pattern+' '+await text());}
    await until(/authenticity|fingerprint|password/i);await page.locator('.terminal-pane:not([hidden]) .xterm-helper-textarea').focus();if(!/password/i.test(await text())){await page.keyboard.type('yes');await page.keyboard.press('Enter');await until(/password/i);}await page.keyboard.type(password);await page.keyboard.press('Enter');await until(/LATENCY_READY/);
+   let reconnectVerified=false;
    const samples=[];for(const ch of 'abcdefghij'){
     await wait(90+(ch.charCodeAt(0)%5)*37);
     await page.evaluate(ch=>{window.echoStart=performance.now();window.echoLatency=null;const t=window.latencyTerminal,subscription=t.onRender(()=>{const b=t.buffer.active;for(let i=0;i<b.length;i++)if(b.getLine(i).translateToString().includes('REMOTE['+ch+']')){window.echoLatency=performance.now()-window.echoStart;subscription.dispose();break;}});},ch);
     await page.keyboard.type(ch);await page.waitForFunction(()=>window.echoLatency!==null,{},{polling:'raf',timeout:4000});samples.push(Math.round(await page.evaluate(()=>window.echoLatency)));
+   }
+   if(process.env.AIDE_TEST_RECONNECT){
+    assert(await page.locator('#reconnect-session').isDisabled(),'running session cannot reconnect twice');
+    await page.locator('#close-session').click();await page.locator('#confirm-accept').click();
+    await page.waitForFunction(()=>!document.getElementById('reconnect-session').disabled);
+    for(const width of [1440,390]){await page.setViewportSize({width,height:960});await page.locator('#reconnect-session').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(out,(relay?'relay':'direct')+'-reconnect-'+width+'.png')});assert(!(await page.locator('html').evaluate(e=>e.scrollWidth>e.clientWidth+1)),'reconnect toolbar overflow');}
+    await page.setViewportSize({width:1440,height:960});await page.locator('#reconnect-session').click();
+    await until(/重新连接[\s\S]*password:/i);await page.locator('.terminal-pane:not([hidden]) .xterm-helper-textarea').focus();await page.keyboard.type(password);await page.keyboard.press('Enter');
+    await until(/重新连接[\s\S]*LATENCY_READY/);assert.equal(m.list(ui).sessions.length,1);assert.equal(m.list(ui).sessions[0].id,rec.id);assert(await page.locator('#reconnect-session').isDisabled());reconnectVerified=true;
    }
    if(!process.env.LATENCY_BASELINE){
     const paste='0123456789'.repeat(800);await page.evaluate(paste=>window.latencyTerminal.paste(paste),paste);await page.keyboard.type('Z');
     for(let i=0;i<200&&remoteInput!=='abcdefghij'+paste+'Z';i++)await wait(20);
     assert(remoteInput==='abcdefghij'+paste+'Z','paste and subsequent key preserve exact byte order');
     await wait(100);
-    assert.equal(maxInFlight,1);assert.equal(probes,0,'background probe cannot block active SSH');
+    assert.equal(maxInFlight,1);assert.equal(probesWhileActive,0,'background probe cannot block active SSH');if(!process.env.AIDE_TEST_RECONNECT)assert.equal(probes,0);
     const before=remoteInput;await page.evaluate(()=>window.dropNextAck());await page.keyboard.type('Q');
     await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('不会自动重发'));
     await wait(300);assert.equal(remoteInput,before+'Q','uncertain accepted input must not be replayed');
    }
-   const sorted=[...samples].sort((a,b)=>a-b);if(!process.env.LATENCY_BASELINE)assert(sorted[5]<300,'fixture median must stay below300ms');results.push({kind:relay?'ssh-relay-tls':'ssh-direct',samplesMs:samples,medianMs:sorted[5],p90Ms:sorted[8],maxMs:sorted[9],bridgeCalls:calls,maxInFlight,automaticProbes:probes});
+   const sorted=[...samples].sort((a,b)=>a-b);if(!process.env.LATENCY_BASELINE)assert(sorted[5]<300,'fixture median must stay below300ms');results.push({kind:relay?'ssh-relay-tls':'ssh-direct',samplesMs:samples,medianMs:sorted[5],p90Ms:sorted[8],maxMs:sorted[9],bridgeCalls:calls,maxInFlight,automaticProbes:probes,probesWhileActive,reconnectVerified});
    await page.screenshot({path:path.join(out,relay?'relay-ssh.png':'direct-ssh.png')});await page.close();await m.close(ui,{id:rec.id});m.remove(ui,{id:rec.id});if(agent){const exited=new Promise(r=>agent.once('exit',r));agent.kill();await exited;agent=null;}
   }
   assert.deepEqual(errors,[]);const result={status:'PASS',baseline:!!process.env.LATENCY_BASELINE,scope:'Actual Chromium xterm render, OpenSSH host-key and password authentication, generated Python TLS1.3 relay; host bridge substituted with serial12ms calls, remote echo delayed15ms; loopback only, not user network',results,errors};fs.writeFileSync(path.join(out,'latency.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));

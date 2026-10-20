@@ -76,8 +76,8 @@ class Sessions {
     return space;
   }
   public(rec) {
-    const {visibleToAide=true,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError} = rec;
-    return {visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError};
+    const {connectionRole,multicast,visibleToAide=true,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError} = rec;
+    return {connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError};
   }
   persist(space, rec) {
     const temporary = path.join(space.dir, rec.id + '.json.tmp');
@@ -188,6 +188,7 @@ class Sessions {
     const timer = setTimeout(() => { worker.kill('SIGTERM'); finish.reject(Error('PTY 启动超时')); }, 15000);
     const lines = readline.createInterface({input:worker.stdout});
     lines.on('line', line => {
+      if(rec.worker!==worker)return;
       try {
         if (line.length > 32768) throw Error('PTY 响应过大');
         const msg = JSON.parse(line);
@@ -198,6 +199,7 @@ class Sessions {
       } catch (_) { rec.status = 'error'; worker.kill('SIGTERM'); finish.reject(Error('PTY 通信失败')); }
     });
     const end = () => {
+      if(rec.worker!==worker)return;
       clearTimeout(timer); rec.worker = null;rec.relayTunnel?.close();rec.relayTunnel=null;
       if (rec.status !== 'error') rec.status = 'exited';
       rec.endedAt = new Date().toISOString();
@@ -208,6 +210,40 @@ class Sessions {
     worker.stdin.write(JSON.stringify({cwd:working, argv, cols, rows, identityMaterial})+'\n');
     await ready;
     return {session:this.public(rec)};
+  }
+  pinWorkspaceSocket(space,remote) {
+    // Manual reconnect may receive the host's live control path rather than the
+    // inode-pinned path supplied on initial creation. Freeze that exact master
+    // before spawning SSH; never fall back to another connection or credential.
+    try {
+      const source=fs.lstatSync(remote.socket,{bigint:true});if(!source.isSocket())throw Error();
+      const socket=path.join(space.dir,'.ssh-master-'+crypto.createHash('sha256').update(String(source.dev)+':'+String(source.ino)).digest('hex').slice(0,32));
+      try{fs.linkSync(remote.socket,socket);}catch(error){if(error.code!=='EEXIST')throw error;}
+      const pinned=fs.lstatSync(socket,{bigint:true});if(!pinned.isSocket()||pinned.dev!==source.dev||pinned.ino!==source.ino)throw Error();
+      return {...remote,socket};
+    } catch(_){throw Error('工作区 SSH 连接不可用，请先重新连接工作区');}
+  }
+  async reconnect(workspace,args) {
+    const space=this.space(workspace),rec=this.get(space,args.id,workspace);
+    if(this.stopping)throw Error('后台正在停止');
+    if(rec.worker||rec.reconnecting||rec.relayConnecting)throw Error('会话已经连接或正在连接');
+    if(!this.public(rec).reconnectable)throw Error('TCP 接入会话不能主动重连，请重新启动对应监听并等待设备接入；旧版未记录方向的 TCP 会话请新建客户端');
+    const stored=this.public(rec);
+    space.resources?.delete(rec.resource);rec.transport=null;
+    rec.reconnecting=true;rec.status='starting';delete rec.endedAt;delete rec.exitCode;
+    try {
+      this.output(space,rec,Buffer.from('\r\n[重新连接 · '+new Date().toISOString()+']\r\n'));
+      this.persist(space,rec);
+      // The host's existing relay_connect admission loads canonical saved key
+      // references for every stored session; browser/model overrides are ignored.
+      const context=stored.kind==='workspace'?{...workspace,remote:this.pinWorkspaceSocket(space,workspace.remote)}:workspace;
+      const result=await (rec.relayEnabled?this.relayConnect(context,{id:rec.id}):this.create(context,stored,rec));
+      if(this.stopping)throw Error('后台正在停止');
+      this.get(space,rec.id,workspace);return result;
+    } catch(error) {
+      if(rec.worker)await this.closeRecord(space,rec).catch(()=>{});
+      rec.status='error';rec.endedAt=new Date().toISOString();this.persist(space,rec);throw error;
+    } finally {rec.reconnecting=false;}
   }
   relayConfig(space,rec){return JSON.parse(readPrivate(path.join(space.dir,rec.id+'.relay.json')));}
   createRelay(space,rec,args,workspace){
@@ -243,7 +279,7 @@ class Sessions {
   }
   relayLine(space,rec,buffer,direction){const printable=buffer.toString('utf8').replace(/\uFFFD/g,'.').replace(/[\x00-\x1f\x7f]/g,'.');this.output(space,rec,Buffer.from(`[${new Date().toISOString()} ${direction} ${buffer.length} B] ${buffer.toString('hex').replace(/../g,'$& ').trim()} | ${printable}\r\n`));}
   async relayConnect(workspace,args){
-    const space=this.space(workspace),rec=this.get(space,args.id,workspace);if(!rec.relayEnabled)throw Error('此会话未启用中继');if(this.stopping)throw Error('后台正在停止');if(rec.worker||rec.relayConnecting)throw Error('会话已经连接或正在连接');
+    const space=this.space(workspace),rec=this.get(space,args.id,workspace);if(!rec.relayEnabled)return this.reconnect(workspace,args);if(this.stopping)throw Error('后台正在停止');if(rec.worker||rec.relayConnecting)throw Error('会话已经连接或正在连接');
     if([...this.spaces.values()].flatMap(s=>[...s.records.values()]).filter(r=>r.worker).length>=MAX_ACTIVE)throw Error('最多同时运行16个会话');
     rec.relayConnecting=true;try{
     const config=this.relayConfig(space,rec);
@@ -277,7 +313,7 @@ class Sessions {
       if(event.subtype==='connected'&&event.role==='server'){
         const listener=[...space.records.values()].find(r=>r.kind==='tcp-server'&&r.port===event.listenerPort&&r.worker);
         if(this.stopping||!listener||space.records.size>=MAX_SESSIONS||[...this.spaces.values()].flatMap(s=>[...s.records.values()]).filter(r=>r.worker).length>=MAX_ACTIVE){space.communications.call('tcp_close',{connectionId:event.connectionId}).catch(()=>{});return;}
-        const rec={id:crypto.randomBytes(12).toString('hex'),visibleToAide:listener.visibleToAide!==false,kind:'tcp',name:listener.name+' · '+event.remote,host:event.remote.slice(0,event.remote.lastIndexOf(':')),port:Number(event.remote.slice(event.remote.lastIndexOf(':')+1)),cwd:'.',cols:100,rows:30,createdAt:new Date().toISOString(),status:'running',logging:listener.logging,offset:0,base:0,history:Buffer.alloc(0),worker:{},resource:event.connectionId};
+        const rec={id:crypto.randomBytes(12).toString('hex'),visibleToAide:listener.visibleToAide!==false,connectionRole:'server',kind:'tcp',name:listener.name+' · '+event.remote,host:event.remote.slice(0,event.remote.lastIndexOf(':')),port:Number(event.remote.slice(event.remote.lastIndexOf(':')+1)),cwd:'.',cols:100,rows:30,createdAt:new Date().toISOString(),status:'running',logging:listener.logging,offset:0,base:0,history:Buffer.alloc(0),worker:{},resource:event.connectionId};
         rec.transport={close:()=>space.communications.call('tcp_close',{connectionId:event.connectionId})};space.resources.set(event.connectionId,rec);space.records.set(rec.id,rec);try{this.persist(space,rec);}catch(_){rec.status='error';rec.worker=null;space.communications.call('tcp_close',{connectionId:event.connectionId}).catch(()=>{});}
       }
       if(event.subtype==='closed'){
@@ -292,9 +328,9 @@ class Sessions {
       rec.host=text(args.host,'127.0.0.1',253);if(!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(rec.host)&&!/^[a-fA-F0-9:]+$/.test(rec.host))throw Error('通信主机名无效');
       rec.port=integer(args.port,rec.kind==='tcp'?undefined:0,rec.kind==='tcp'?1:0,65535);
     }
-    if(rec.kind==='tcp')result=await comm.call('tcp_connect',{host:rec.host,port:rec.port});
+    if(rec.kind==='tcp'){result=await comm.call('tcp_connect',{host:rec.host,port:rec.port});rec.connectionRole='client';}
     if(rec.kind==='tcp-server'){result=await comm.call('tcp_listen',{port:rec.port});rec.port=result.port;rec.host=result.host;}
-    if(rec.kind==='udp'){rec.bindPort=integer(args.bindPort,0,0,65535);result=await comm.call('udp_bind',{port:rec.bindPort,multicast:!!args.multicast});rec.bindPort=result.port;}
+    if(rec.kind==='udp'){rec.bindPort=integer(args.bindPort,0,0,65535);rec.multicast=!!args.multicast;result=await comm.call('udp_bind',{port:rec.bindPort,multicast:rec.multicast});rec.bindPort=result.port;}
     if(rec.kind==='serial'){
       rec.devicePath=text(args.devicePath,'',512);rec.baudRate=integer(args.baudRate,115200,1,4000000);rec.dataBits=integer(args.dataBits,8,5,8);rec.stopBits=Number(args.stopBits??1);rec.parity=args.parity||'none';rec.flowControl=!!args.flowControl;
       if(![1,1.5,2].includes(rec.stopBits)||!['none','even','odd','mark','space'].includes(rec.parity))throw Error('串口参数无效');
@@ -360,6 +396,7 @@ class Sessions {
   }
   async close(workspace, args) {
     const space = this.space(workspace), rec = this.get(space,args.id,workspace);
+    if(rec.reconnecting||rec.relayConnecting)throw Error('会话正在连接，请稍后再结束');
     return this.closeRecord(space,rec);
   }
   async closeRecord(space,rec) {
@@ -399,7 +436,7 @@ class Sessions {
   }
   remove(workspace, args) {
     const space=this.space(workspace), rec=this.get(space,args.id,workspace);
-    if (rec.worker) throw Error('请先关闭会话，再删除记录与日志');
+    if (rec.worker||rec.reconnecting||rec.relayConnecting) throw Error('请先关闭会话，再删除记录与日志');
     for (let i=0;i<LOG_FILES;i++) fs.rmSync(this.logPath(space,rec.id,i),{force:true});
     fs.rmSync(path.join(space.dir,rec.id+'.relay.json'),{force:true});
     fs.rmSync(path.join(space.dir,rec.id+'.json')); space.records.delete(rec.id);space.resources?.delete(rec.resource);

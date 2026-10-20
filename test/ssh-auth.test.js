@@ -3,7 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const {Server,utils}=require('ssh2'),{Sessions}=require('../sessions');
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,label){for(let i=0;i<250;i++){if(await fn())return;await delay(25);}throw Error('Timeout '+label);}
-async function output(m,c,id,pattern){let text='';await until(()=>{text=Buffer.from(m.poll(c,{id}).output.data,'base64').toString();return pattern.test(text);},pattern);return text;}
+async function output(m,c,id,pattern,offset=0){let text='';await until(()=>{text=Buffer.from(m.poll(c,{id,offset}).output.data,'base64').toString();return pattern.test(text);},pattern);return text;}
 function pair(passphrase){return generateKeyPairSync('rsa',{modulusLength:2048,privateKeyEncoding:{type:'pkcs1',format:'pem',...(passphrase?{cipher:'aes-256-cbc',passphrase}:{})},publicKeyEncoding:{type:'pkcs1',format:'pem'}}).privateKey;}
 async function device(t,key,passphrase){
  const pub=utils.parseKey(key,passphrase),host=pair(),clients=new Set(),state={auth:0,commands:[]};
@@ -16,6 +16,10 @@ for(const encrypted of [false,true])test('real OpenSSH memory-backed '+(encrypte
  await output(m,context,rec.id,/authenticity|fingerprint/);m.send(context,{id:rec.id,data:'yes\r'});
  if(encrypted){await output(m,context,rec.id,/passphrase/);m.send(context,{id:rec.id,data:secret+'\r'});}
  await output(m,context,rec.id,/KEY_AUTH_READY/);assert.equal(d.state.auth,1);m.send(context,{id:rec.id,data:'hello\r'});await output(m,context,rec.id,/ECHO:hello/);
+ await m.close(context,{id:rec.id});const offset=m.poll(context,{id:rec.id}).output.offset;
+ const reopened=(await m.reconnect(context,{id:rec.id,identityFile:'wrong-key',identitySource:'override'})).session;assert.equal(reopened.id,rec.id);assert.equal(reopened.identityFile,'board.pem');assert.equal(reopened.identitySource,'device-keys');
+ if(encrypted){await output(m,context,rec.id,/passphrase/,offset);m.send(context,{id:rec.id,data:secret+'\r'});}
+ await output(m,context,rec.id,/KEY_AUTH_READY/,offset);assert.equal(d.state.auth,2);assert.equal(m.list(context).sessions.length,1);
  const dir=path.join(root,'.aide/terminal-workbench');for(const name of fs.readdirSync(dir)){const b=fs.readFileSync(path.join(dir,name));assert(!b.includes(Buffer.from(key)));assert(!b.includes(Buffer.from(secret)));assert(!b.includes(Buffer.from(context.identityMaterial)));}assert.equal(rec.identitySource,'device-keys');assert.equal(rec.auth,'key');
 });
 test('SSH workspace borrows authenticated master, quotes remote cwd, retains logs and fails closed after master exit',{timeout:20000},async t=>{
@@ -25,5 +29,6 @@ test('SSH workspace borrows authenticated master, quotes remote cwd, retains log
  master=spawn('ssh',['-F','/dev/null','-M','-N','-S',sock,'-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+known,'-o','IdentitiesOnly=yes','-i',keyFile,'-p',String(d.port),'-l','device','127.0.0.1'],{stdio:'ignore'});await until(()=>fs.existsSync(sock),'SSH master');
  const context={storageRoot:root,mode:'ssh',remote:{host:'127.0.0.1',port:d.port,username:'device',path:"/remote/project's files",socket:sock}};
  const rec=(await m.create(context,{name:'Workspace',cwd:'src'})).session;await output(m,context,rec.id,/WORKSPACE_READY/);assert.equal(rec.kind,'workspace');assert.equal(d.state.auth,1,'no second authentication');assert.equal(d.state.commands[0],"cd -- '/remote/project'\"'\"'s files/src' && exec /bin/bash --noprofile --norc -i");m.send(context,{id:rec.id,data:'status\r'});await output(m,context,rec.id,/REMOTE:status/);assert(m.logs(context,{id:rec.id}).files.length);assert.equal(m.list(context).workspace.mode,'ssh');
- await assert.rejects(m.create(context,{cwd:'../escape'}),/目录/);master.kill();await until(()=>!fs.existsSync(sock),'master exit');const failed=(await m.create(context,{})).session;await until(()=>m.list(context).sessions.find(r=>r.id===failed.id).status!=='running','closed without fallback');assert.equal(d.state.auth,1,'missing master must not authenticate again');
+ await m.close(context,{id:rec.id});assert.equal((await m.reconnect(context,{id:rec.id})).session.id,rec.id);await until(()=>d.state.commands.length===2,'workspace shell reconnect');assert.equal(d.state.auth,1,'reconnect must reuse authenticated master');await m.close(context,{id:rec.id});
+ await assert.rejects(m.create(context,{cwd:'../escape'}),/目录/);master.kill();await until(()=>!fs.existsSync(sock),'master exit');await assert.rejects(m.reconnect(context,{id:rec.id}),/工作区 SSH 连接不可用/);const failed=(await m.create(context,{})).session;await until(()=>m.list(context).sessions.find(r=>r.id===failed.id).status!=='running','closed without fallback');assert.equal(d.state.auth,1,'missing master must not authenticate again');
 });
