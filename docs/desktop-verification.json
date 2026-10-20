@@ -100,7 +100,7 @@
     "errors": []
   },
   "nativeHost": "PASS race: actual1.5.0 ZIP install, daemon, capabilities, scoped legacy tools and trusted user/hidden-model access; screenshot evidence JPEG decode/bounds/vision gate/max4/prior-frame pruning; vet PASS",
-  "hostQuick": "PASS agent-route.py verify quick",
+  "hostQuick": "BLOCKED: final agent-route quick failed only unchanged test_launcher_data.py ownership assertion and unchanged test_offline_bundle.py real 10GiB disk guard (about5GiB available). Focused desktop/host/ZIP race and vet pass; no guard bypass or full host/image release.",
   "imageForwarding": "JPEG visual evidence appended after tool replies only for vision-capable model; text models informed of limitation. No paid/live provider call.",
   "screenshots": [
     "screenshots/desktop-rdp-1440.png",
