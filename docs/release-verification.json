@@ -1,14 +1,14 @@
 {
-  "status": "PASS",
-  "version": "1.1.1",
-  "zipSHA256": "f70d53d819444dd5b16f5a87f99f70e500241e464dfdd1d05976a1feecd319cf",
-  "zipBytes": 104320,
-  "hostEntry": "PASS: actual upgrade API 200",
-  "surfaceTools": 11,
-  "runtimeEqualsHost": true,
-  "pluginTests": "6 PASS",
-  "ui": "Chromium: 4 themes, selected-label contrast, standalone fills viewport, desktop inspector, 1024/768/390px, mobile navigation and Escape",
-  "hostBranch": "codex/terminal-workbench",
-  "hostPR": "https://github.com/skyelan1999/aide/pull/7",
-  "compatibility": "requires bridge.renew and daemon.detach; host standalone layout requires updated PR #7; stable market stays 1.0.0"
+  "status": "PASS focused checks; integration UI NOT_RUN",
+  "version": "1.1.2",
+  "zipSHA256": "b693388208ead34aab7d3192b6c210424f5fd5f55f2e79f0df67b073638da1de",
+  "zipBytes": 104365,
+  "pluginTests": "6 PASS real PTY/OpenSSH",
+  "hostControllerTests": "13 PASS plus lock and bootstrap recovery",
+  "browserComponent": "PASS Chromium actual controller/CSS fixture: 1440/390px dark/light, embedded open/close, no new-tab button",
+  "integrationUI": "NOT_RUN: start.command activation remains blocked by container certificate trust and disk prerequisites",
+  "hostBranch": "main",
+  "compatibility": "requires terminal-workbench-v1, bridge.renew and daemon.detach; update host main to remove host-owned buttons; plugin ZIP alone cannot change host UI",
+  "runtimeChanges": "version and README only; session runtime unchanged",
+  "rollback": "Reinstall prior immutable ZIP; host removal can be reverted separately. Plugin upgrade stops live connections, retains workspace logs and records."
 }
