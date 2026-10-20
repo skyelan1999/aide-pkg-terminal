@@ -1,16 +1,22 @@
 {
   "id": "terminal",
   "name": "设备终端",
-  "description": "常驻本地/SSH 设备调试工作台、独立会话与轮转日志",
-  "version": "1.4.2",
+  "description": "常驻 Shell/SSH、TCP/UDP/串口和 RDP/VNC 桌面，支持加密中继、虚拟输入、截图与录屏",
+  "version": "1.5.0",
   "author": "aide",
   "main": "index.js",
   "enabled": true,
   "settingsSchema": {
     "type": "object",
     "title": "插件参数",
-    "description": "此插件暂未声明专属选项。可在扩展参数中添加插件会读取的设置，也可切换到文本模式直接编辑 JSON。",
-    "properties": {},
+    "description": "桌面依赖由 Aide 所在 Linux 运行环境提供；插件独立安装。",
+    "properties": {
+      "desktopRuntimeRoot": {
+        "type": "string",
+        "title": "可选桌面原生运行库目录",
+        "description": "为空时使用系统 Xvfb、FreeRDP2/3、TigerVNC、xdotool 和 FFmpeg；可填管理员准备的运行库根目录（含usr/bin）。"
+      }
+    },
     "additionalProperties": true
   },
   "daemon": true,
@@ -33,7 +39,8 @@
       "terminal_session_visibility",
       "terminal_session_relay_script",
       "terminal_session_relay_status",
-      "terminal_session_relay_connect"
+      "terminal_session_relay_connect",
+      "terminal_session_desktop"
     ],
     "closeBehavior": "detach"
   }
