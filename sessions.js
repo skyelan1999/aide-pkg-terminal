@@ -7,8 +7,6 @@ const readline = require('node:readline');
 const HISTORY = 512 * 1024, PAGE = 64 * 1024, MAX_SESSIONS = 32, MAX_ACTIVE = 16;
 const LOG_BYTES = 2 * 1024 * 1024, LOG_FILES = 4;
 const relay=require('./relay/client');
-const {Desktop,rdpFingerprint,privateDir:desktopPrivateDir}=require('./desktop/runtime');
-const DESKTOP_KINDS=['rdp','vnc'];
 const {Communications,data:communicationData}=require('./communications');
 const COMM_KINDS=['tcp','tcp-server','udp','serial'];
 const ID = /^[a-f0-9]{24}$/;
@@ -45,7 +43,7 @@ function inside(root, relative, directory = true) {
   return real;
 }
 class Sessions {
-  constructor(options={}) { this.desktopOptions=options; this.spaces = new Map(); this.stopping = false; }
+  constructor() { this.spaces = new Map(); this.stopping = false; }
   space(workspace) {
     const context = typeof workspace === 'object' && workspace ? workspace : null;
     workspace = context ? context.storageRoot : workspace;
@@ -61,9 +59,11 @@ class Sessions {
     if(state!==root&&!fs.existsSync(path.join(dir,'migrated'))&&fs.existsSync(legacy))for(const name of fs.readdirSync(legacy)){if(!/^(?:[a-f0-9]{24}\.(?:json|log(?:\.[1-3])?)|known_hosts)$/.test(name))continue;const destination=path.join(dir,name);const oldFile=path.join(legacy,name),bytes=readPrivate(oldFile);if(!fs.existsSync(destination))writePrivate(destination,bytes);if(readPrivate(destination).equals(bytes))fs.rmSync(oldFile);}
     if(state!==root)writePrivate(path.join(dir,'migrated'),'1');
     const space = {root, dir, remote:context?.remote, disabledTools:context?.disabledTools||[], records:new Map()};
-    for (const file of fs.readdirSync(dir).filter(x => /^[a-f0-9]{24}\.json$/.test(x)).slice(0, MAX_SESSIONS)) {
+    for (const file of fs.readdirSync(dir).filter(x => /^[a-f0-9]{24}\.json$/.test(x))) {
       const rec = JSON.parse(readPrivate(path.join(dir, file)));
       if (!ID.test(rec.id) || file !== rec.id + '.json') throw Error('会话记录损坏');
+      if (!['local','workspace','ssh',...COMM_KINDS].includes(rec.kind)) continue;
+      if (space.records.size >= MAX_SESSIONS) break;
       if (['starting','running'].includes(rec.status)) { rec.status = 'interrupted'; rec.endedAt = new Date().toISOString(); }
       rec.worker = null; rec.history = Buffer.alloc(0); rec.base = rec.offset = 0;
       // Restore a bounded output tail. Live processes are deliberately never auto-restarted.
@@ -78,8 +78,8 @@ class Sessions {
     return space;
   }
   public(rec) {
-    const {width,height,domain,certificateFingerprint,allowNoAuth,desktopError,connectionRole,multicast,visibleToAide=true,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError} = rec;
-    return {width,height,domain,certificateFingerprint,allowNoAuth,desktopError,desktopRecording:!!rec.desktop?.recording,connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError};
+    const {connectionRole,multicast,visibleToAide=true,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError} = rec;
+    return {connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError};
   }
   persist(space, rec) {
     const temporary = path.join(space.dir, rec.id + '.json.tmp');
@@ -127,7 +127,7 @@ class Sessions {
     if (active >= MAX_ACTIVE) throw Error('最多同时运行16个会话');
     let kind = args.kind || 'local';
     if (kind === 'local' && space.remote) kind = 'workspace';
-    if (!['local','ssh','workspace',...COMM_KINDS,...DESKTOP_KINDS].includes(kind)) throw Error('未知会话类型');
+    if (!['local','ssh','workspace',...COMM_KINDS].includes(kind)) throw Error('未知会话类型');
     const cwd = text(args.cwd, '.', 512);
     if (path.isAbsolute(cwd) || cwd.split(/[\\/]/).includes('..')) throw Error('目录路径必须位于当前工作区内');
     const working = space.remote ? space.root : inside(space.root, cwd);
@@ -136,7 +136,6 @@ class Sessions {
     const rec = existing || {visibleToAide:args.visibleToAide!==false,id:crypto.randomBytes(12).toString('hex'), kind, name:text(args.name, kind === 'ssh' ? 'SSH 设备' : '本地终端', 80), cwd, cols, rows,
       createdAt:new Date().toISOString(),status:'starting',logging:args.logging !== false,offset:0,base:0,history:Buffer.alloc(0),worker:null};
     if(args.relay?.enabled&&!existing)return this.createRelay(space,rec,args,workspace);
-    if(DESKTOP_KINDS.includes(kind)){Object.assign(rec,this.desktopConfig(args),{host:text(args.host,'127.0.0.1',253),port:integer(args.port,kind==='rdp'?3389:5900,1,65535),status:'waiting'});if(!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(rec.host))throw Error('桌面主机名无效');space.records.set(rec.id,rec);this.persist(space,rec);return {session:this.public(rec)};}
     if(COMM_KINDS.includes(kind))return this.startCommunication(space,rec,args);
     if(process.platform==='win32')throw Error('交互式 PTY 需要 Linux/macOS；Windows 请使用 Aide Linux 容器');
     let argv = ['/bin/bash', '--noprofile', '--norc', '-i'];
@@ -231,7 +230,6 @@ class Sessions {
     if(this.stopping)throw Error('后台正在停止');
     if(rec.worker||rec.reconnecting||rec.relayConnecting)throw Error('会话已经连接或正在连接');
     if(!this.public(rec).reconnectable)throw Error('TCP 接入会话不能主动重连，请重新启动对应监听并等待设备接入；旧版未记录方向的 TCP 会话请新建客户端');
-    if(DESKTOP_KINDS.includes(rec.kind))return this.desktopCall(workspace,{action:'connect',id:rec.id,password:args.password});
     const stored=this.public(rec);
     space.resources?.delete(rec.resource);rec.transport=null;
     rec.reconnecting=true;rec.status='starting';delete rec.endedAt;delete rec.exitCode;
@@ -249,52 +247,13 @@ class Sessions {
       rec.status='error';rec.endedAt=new Date().toISOString();this.persist(space,rec);throw error;
     } finally {rec.reconnecting=false;}
   }
-  desktopConfig(args){
-    const username=args.username?text(args.username,'',128):'',domain=args.domain?text(args.domain,'',128):'',certificateFingerprint=String(args.certificateFingerprint||'').replace(/:/g,'').toLowerCase();
-    if(args.kind==='rdp'&&!username)throw Error('请输入 RDP 用户名');
-    if(/[\x00-\x1f]/.test(username+domain)||certificateFingerprint&&!/^[a-f0-9]{64}$/.test(certificateFingerprint))throw Error('桌面身份或证书指纹无效');
-    return{username,domain,certificateFingerprint,width:integer(args.width,1280,320,1920),height:integer(args.height,720,240,1080),allowNoAuth:args.allowNoAuth===true};
-  }
-  async desktopCall(workspace,args){
-    const space=this.space(workspace),action=String(args.action||''),inputActions=['move','click','double_click','down','up','drag','scroll','key','keydown','keyup','combo','text','release'];
-    const permission=['connect','probe_rdp','trust_rdp'].includes(action)?'connect':action==='capture'||action==='frame'?'capture':action==='record_start'?'record_start':action==='record_stop'?'record_stop':inputActions.includes(action)?(action==='text'?'type':['key','keydown','keyup','combo','release'].includes(action)?'key':'mouse'):'media';
-    if(space.disabledTools?.includes('terminal_desktop_'+permission))throw Error('桌面工具已被管理员禁用');
-    if(action==='status'){const d=new Desktop(this.desktopOptions),dependencies={};for(const [name,binaries]of Object.entries({display:['Xvfb'],rdp:['xfreerdp3','xfreerdp'],vnc:['xtigervncviewer','vncviewer'],vncPassword:['tigervncpasswd','vncpasswd'],input:['xdotool'],media:['ffmpeg']})){try{d.binary(binaries);dependencies[name]=true;}catch(_){dependencies[name]=false;}}return{platform:process.platform,dependencies,maxDesktops:4};}
-    const rec=args.id?this.get(space,args.id,workspace):null;
-    if(action==='probe_rdp'){
-      const endpoint=rec?{host:rec.host,port:rec.port}:{host:text(args.host,'',253),port:integer(args.port,3389,1,65535)};
-      if(!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(endpoint.host))throw Error('主机名无效');
-      if(rec&&rec.kind!=='rdp')throw Error('此会话不是 RDP');if(rec?.relayEnabled)endpoint.socket=await relay.open(this.relayConfig(space,rec));return rdpFingerprint(endpoint);
-    }
-    if(!rec||!DESKTOP_KINDS.includes(rec.kind))throw Error('请选择 RDP 或 VNC 桌面会话');
-    if(action==='trust_rdp'){
-      if(workspace?.workbench!==true||rec.kind!=='rdp')throw Error('证书信任仅允许工作台用户修改');
-      const fingerprint=String(args.certificateFingerprint||'').replace(/:/g,'').toLowerCase();if(!/^[a-f0-9]{64}$/.test(fingerprint))throw Error('SHA256 指纹无效');if(rec.worker||rec.desktopConnecting)throw Error('请先结束连接再修改证书');rec.certificateFingerprint=fingerprint;
-      if(rec.relayEnabled){const config=this.relayConfig(space,rec);config.target.certificateFingerprint=fingerprint;writePrivate(path.join(space.dir,rec.id+'.relay.json'),JSON.stringify(config));}this.persist(space,rec);return{session:this.public(rec)};
-    }
-    if(action==='connect'){
-      if(process.platform!=='linux')throw Error('桌面会话需要 Linux 运行环境，可使用 Aide Linux 容器');if(this.stopping)throw Error('后台正在停止');if(rec.worker||rec.desktopConnecting)throw Error('桌面已经连接或正在连接');
-      if([...this.spaces.values()].flatMap(s=>[...s.records.values()]).filter(r=>r.desktop&&!r.desktop.closed||r.desktopConnecting).length>=4)throw Error('最多同时运行4个桌面');
-      if(args.password===undefined&&!(rec.kind==='vnc'&&rec.allowNoAuth))throw Error('请在桌面连接面板重新输入密码');
-      rec.desktopConnecting=true;rec.status='starting';delete rec.desktopError;delete rec.endedAt;const d=new Desktop(this.desktopOptions);rec.desktop=d;
-      try{
-        let endpoint={host:rec.host,port:rec.port};if(rec.relayEnabled){rec.relayTunnel=await relay.tunnel(this.relayConfig(space,rec),online=>{rec.relayOnline=online?'online':'offline';});endpoint={host:'127.0.0.1',port:rec.relayTunnel.port};}
-        await d.start(space,rec,args.password||'',endpoint,message=>{if(rec.desktop!==d)return;rec.desktopError=message;this.closeRecord(space,rec).catch(()=>{});});
-        this.get(space,rec.id,workspace);if(this.stopping||d.closed)throw Error('桌面连接已取消');rec.worker={};rec.transport={close:async()=>{await d.close();rec.relayTunnel?.close();rec.relayTunnel=null;}};rec.status='running';this.output(space,rec,Buffer.from('[远程桌面已连接 · '+rec.kind.toUpperCase()+' · '+new Date().toISOString()+']\r\n'));this.persist(space,rec);return{session:this.public(rec)};
-      }catch(error){await d.close();rec.relayTunnel?.close();rec.relayTunnel=null;rec.worker=null;rec.transport=null;rec.status='error';rec.desktopError=error.message;rec.endedAt=new Date().toISOString();this.persist(space,rec);throw error;}finally{rec.desktopConnecting=false;}
-    }
-    let d=rec.desktop;if(!d?.mediaDir){d=new Desktop(this.desktopOptions);d.mediaDir=desktopPrivateDir(path.join(space.dir,rec.id+'.media'));}
-    if(action==='media_list')return{media:d.mediaList()};if(action==='media_read'||action==='media_delete')return d.media(args);
-    if(!rec.worker||!rec.desktop||rec.desktop.closed)throw Error('桌面未连接，请先连接或重新连接');d=rec.desktop;
-    if(action==='frame')return{...d.image(args.after),session:this.public(rec)};if(action==='capture')return d.screenshot();if(action==='record_start'){const result=await d.recordStart(args);this.persist(space,rec);return result;}if(action==='record_stop'){const result=await d.recordStop();this.persist(space,rec);return result;}if(action==='release')return d.release();if(inputActions.includes(action))return d.input(args);throw Error('未知桌面动作');
-  }
   relayConfig(space,rec){return JSON.parse(readPrivate(path.join(space.dir,rec.id+'.relay.json')));}
   createRelay(space,rec,args,workspace){
     if(workspace?.workbench!==true||!workspace.stateRoot)throw Error('请通过新版工作台配置中继');
-    if(!['ssh','tcp','udp','serial',...DESKTOP_KINDS].includes(rec.kind))throw Error('中继支持 SSH、TCP、UDP、串口、RDP 和 VNC 会话');
-    const target={kind:rec.kind,...(DESKTOP_KINDS.includes(rec.kind)?this.desktopConfig(args):{})};
+    if(!['ssh','tcp','udp','serial'].includes(rec.kind))throw Error('中继支持 SSH、TCP、UDP 和串口会话');
+    const target={kind:rec.kind};
     if(rec.kind==='serial')Object.assign(target,{devicePath:text(args.devicePath,'',512),baudRate:integer(args.baudRate,115200,1,4000000),dataBits:integer(args.dataBits,8,5,8),stopBits:Number(args.stopBits??1),parity:args.parity||'none',flowControl:!!args.flowControl});
-    else Object.assign(target,{host:text(args.host,'127.0.0.1',253),port:integer(args.port,rec.kind==='ssh'?22:rec.kind==='rdp'?3389:rec.kind==='vnc'?5900:undefined,1,65535)});
+    else Object.assign(target,{host:text(args.host,'127.0.0.1',253),port:integer(args.port,rec.kind==='ssh'?22:undefined,1,65535)});
     if(target.host&&!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(target.host))throw Error('目标主机名无效');
     if(rec.kind==='serial'&&(![1,1.5,2].includes(target.stopBits)||!['none','even','odd','mark','space'].includes(target.parity)))throw Error('串口参数无效');
     if(rec.kind==='ssh'){Object.assign(target,{username:text(args.username,'',64),auth:args.auth||'default',identityFile:args.identityFile,identitySource:args.identitySource});if(!/^[a-zA-Z0-9_][a-zA-Z0-9_.@-]*$/.test(target.username)||!['default','password','key'].includes(target.auth))throw Error('SSH 用户名或认证方式无效');if(target.auth==='key'&&!target.identityFile)throw Error('请选择私钥文件');}
@@ -313,7 +272,7 @@ class Sessions {
   }
   visibility(workspace,args){
     if(workspace?.workbench!==true)throw Error('可见性仅允许在工作台修改');
-    const space=this.space(workspace),rec=this.get(space,args.id,workspace);if(typeof args.visible!=='boolean')throw Error('visible 须为布尔值');if(!args.visible)rec.desktop?.release().catch(()=>{});rec.visibleToAide=args.visible;this.persist(space,rec);return {session:this.public(rec)};
+    const space=this.space(workspace),rec=this.get(space,args.id,workspace);if(typeof args.visible!=='boolean')throw Error('visible 须为布尔值');rec.visibleToAide=args.visible;this.persist(space,rec);return {session:this.public(rec)};
   }
   async relayStatus(workspace,args){
     const space=this.space(workspace),rec=this.get(space,args.id,workspace);if(!rec.relayEnabled)throw Error('此会话未启用中继');
@@ -439,11 +398,10 @@ class Sessions {
   }
   async close(workspace, args) {
     const space = this.space(workspace), rec = this.get(space,args.id,workspace);
-    if(rec.reconnecting||rec.relayConnecting||rec.desktopConnecting)throw Error('会话正在连接，请稍后再结束');
+    if(rec.reconnecting||rec.relayConnecting)throw Error('会话正在连接，请稍后再结束');
     return this.closeRecord(space,rec);
   }
   async closeRecord(space,rec) {
-    if(rec.desktopConnecting&&rec.desktop&&!rec.transport){await rec.desktop.close();rec.relayTunnel?.close();rec.relayTunnel=null;return{session:this.public(rec)};}
     if(rec.transport){await rec.transport.close();rec.worker=null;rec.status='exited';rec.endedAt=new Date().toISOString();this.persist(space,rec);return {session:this.public(rec)};}
     const worker = rec.worker;
     if (worker) {
@@ -480,16 +438,15 @@ class Sessions {
   }
   remove(workspace, args) {
     const space=this.space(workspace), rec=this.get(space,args.id,workspace);
-    if (rec.worker||rec.reconnecting||rec.relayConnecting||rec.desktopConnecting) throw Error('请先关闭会话，再删除记录与日志');
+    if (rec.worker||rec.reconnecting||rec.relayConnecting) throw Error('请先关闭会话，再删除记录与日志');
     for (let i=0;i<LOG_FILES;i++) fs.rmSync(this.logPath(space,rec.id,i),{force:true});
-    const media=path.join(space.dir,rec.id+'.media');if(fs.existsSync(media)){desktopPrivateDir(media);fs.rmSync(media,{recursive:true});}
     fs.rmSync(path.join(space.dir,rec.id+'.relay.json'),{force:true});
     fs.rmSync(path.join(space.dir,rec.id+'.json')); space.records.delete(rec.id);space.resources?.delete(rec.resource);
     return {deleted:true};
   }
   async stop() {
     this.stopping=true;
-    await Promise.allSettled([...this.spaces.values()].flatMap(space=>[...space.records.values()].filter(rec=>rec.worker||rec.desktopConnecting).map(rec=>this.closeRecord(space,rec))));
+    await Promise.allSettled([...this.spaces.values()].flatMap(space=>[...space.records.values()].filter(rec=>rec.worker).map(rec=>this.closeRecord(space,rec))));
     for(const space of this.spaces.values()){await space.communications?.close();for(const rec of space.records.values())if(rec.transport&&rec.worker){rec.worker=null;rec.status='exited';rec.endedAt=new Date().toISOString();try{this.persist(space,rec);}catch(_){}}}
   }
 }

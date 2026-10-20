@@ -1,8 +1,0 @@
-# Optional native desktop dependencies; plugin code is installed separately.
-ARG AIDE_BASE_IMAGE=aide:local
-FROM ${AIDE_BASE_IMAGE}
-USER root
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    xvfb freerdp2-x11 tigervnc-viewer tigervnc-tools xdotool ffmpeg fonts-dejavu-core \
-    && rm -rf /var/lib/apt/lists/*
-USER aide

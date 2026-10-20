@@ -1,10 +1,10 @@
 # Terminal · Aide 设备终端工作台
 
-**1.5.0 预发布，需配套宿主能力。** 统一 Shell、SSH、TCP、UDP、串口及 RDP/VNC 桌面工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**1.5.1 预发布，需配套宿主能力。** 统一 Shell、SSH、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
 
 ## 安装预发布版
 
-从 [v1.5.0 预发布](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.5.0) 说明中的固定提交链接下载 ZIP 和 SHA256SUMS，经 `sha256sum -c SHA256SUMS` 校验后导入。安装包托管在仓库 `packages/v1.5.0/`，Release 提供下载链接，没有另行上传二进制附件。请先采用配套宿主源码构建；当前公开旧宿主不能完整使用此工作台。
+从 [v1.5.1 预发布](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.5.1) 说明中的固定提交链接下载 ZIP 和 SHA256SUMS，经 `sha256sum -c SHA256SUMS` 校验后导入。安装包托管在仓库 `packages/v1.5.1/`，Release 提供下载链接，没有另行上传二进制附件。请先采用配套宿主源码构建；当前公开旧宿主不能完整使用此工作台。
 
 插件新标签页入口已移除；后台会话、日志及 Aide 管理能力继续保留。宿主界面变更需要更新 Aide main 源码构建，单独升级插件不会替换宿主界面。
 
@@ -103,7 +103,7 @@ node test/browser-layout.cjs
 
 ## 已发布旧版
 
-[1.0.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.0.0) 和 `packages/v1.0.0/` 中的归档保持不变。1.0.0 仅提供命令提案与目录工具，没有本工作台能力。[插件市场](https://skyelan1999.github.io/aide-pkg-shop/) 收录 1.5.0 预发布，要求 `terminal-workbench-v1` 能力；旧宿主会显示不兼容。历史 1.0.0 安装包仍保留。
+[1.0.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.0.0) 和 `packages/v1.0.0/` 中的归档保持不变。1.0.0 仅提供命令提案与目录工具，没有本工作台能力。[插件市场](https://skyelan1999.github.io/aide-pkg-shop/) 现已收录 1.5.1 预发布，要求 `terminal-workbench-v1` 能力；旧宿主会显示不兼容。历史 1.0.0 安装包仍保留。
 
 ## 1.4.2 串口连接与选择修复
 
@@ -142,46 +142,6 @@ Shell/SSH 命令、设备收发与日志仍沿用原会话机制；中继在线�
 
 降级前应备份 Aide 私有会话状态；旧版本不读取新私有目录，不会自动反向迁移。已有设备会话在插件升级时断开，不自动重新连接。
 
+## 1.5.1：恢复终端工作台
 
-## RDP / VNC、虚拟鼠标键盘和媒体（1.5.0）
-
-在“新建会话”选择 RDP 或 VNC，设置目标、桌面大小和对 Aide 可见性。RDP 可填写用户名和域。保存后输入本次连接密码；RDP 首次连接须先“探测证书”，通过可信途径核对 SHA256 指纹，再明确“信任此指纹”。证书变化时拒绝连接，不自动信任或忽略证书。支持 FreeRDP 的 NLA/TLS。VNC 使用传统 VncAuth（密码最多8个 UTF-8 字节）；仅在目标明确无认证时勾选“允许无认证”，不会自动降级。暂不支持 VeNCrypt/X509 等其他 VNC 认证模式。
-
-两种桌面均可勾选“通过中继部署”，下载包含固定目标和中继密钥的 Python 脚本并手动运行；密码不包含在脚本中。中继采用既有 TCP/TLS1.3 加密链路，RDP 内层证书指纹仍需校验。界面保持 RDP/VNC 类型，显示中继模式及在线状态。在线只表示中继可达，连接桌面还需完成远端认证。
-
-运行后显示远端画面；勾选“启用虚拟鼠标键盘”后可以点击、拖动、滚动和按键，也可用文本框明确发送文本。坐标以截图原始像素为准。键盘支持字母数字、标点、Enter、Tab、方向键、F1–F12及 Control/Alt/Shift/Super 组合；文本输入效果受远端键盘布局和输入法影响，未验证中文输入法。失焦或关闭控制时释放已按下的键和鼠标按钮，结果不确定的输入不重发。输入只作用于该会话独立的虚拟桌面。
-
-截图保存 JPEG；录屏保存无音频 H.264 MP4，默认60秒、最长300秒，约15 MiB 到达自动停止，也可手动停止。“截图和录像”可列举、下载和明确删除；下载后仍需点击 Aide 工作台标题栏的“保存”。每会话最多20项，工作区媒体配额256 MiB，需手动清理旧文件。连接结束后保留媒体，删除会话时一起删除。一般终端日志只记录连接状态，不包含桌面帧；截图和录像可能包含敏感屏幕信息。
-
-Aide 可调用以下工具（均按会话 ID 隔离）：
-
-| 工具 | 能力 |
-| --- | --- |
-| `terminal_desktop_connect` | 使用本次密码连接已保存的桌面 |
-| `terminal_desktop_capture` | 截图、保存媒体并返回受限 JPEG 视觉证据 |
-| `terminal_desktop_mouse` | move/click/double_click/down/up/drag/scroll |
-| `terminal_desktop_key` | key/keydown/keyup/combo/release |
-| `terminal_desktop_type` | 输入1–2000字符文本 |
-| `terminal_desktop_record_start` / `terminal_desktop_record_stop` | 有界录屏与停止 |
-| `terminal_desktop_media` | media_list/media_read/media_delete；每页最多64 KiB |
-
-创建配置沿用 `terminal_session_create`（kind 为 rdp/vnc）；工作台使用 `terminal_session_desktop` 分派上述动作以及 frame/status/probe_rdp/trust_rdp。证书信任仅允许可信工作台用户修改。管理员禁用某个桌面工具时，通用分派入口不能绕过。隐藏会话拒绝 Aide 列举、连接、控制、截图及媒体读取。控制和输入须符合用户明确要求。配套 Aide 将明确请求的截图作为视觉证据交给支持图片的模型，每轮最多4张，每张最大1 MiB、1920×1080；文本模型只收到提示，不能声称看见屏幕。录屏不会自动转成模型视频输入。模型工具参数可能进入宿主会话历史；建议密码在工作台输入，不在聊天中提供。
-
-### Linux 原生运行依赖
-
-本插件仍独立分发，不重新引入 Aide 捆绑插件。需要更新 Aide main，提供 `terminal-desktop-v1`（以及已有 workbench/SSH/communications/relay 能力）；旧宿主由市场兼容性检查阻止安装。仅更新插件无法补齐宿主的截图视觉证据支持。
-
-桌面客户端运行在 **Aide 所在的 Linux 进程/容器**，不是浏览器或 SSH 工作区目标内。管理员需安装 Xvfb、FreeRDP2/3、TigerVNC Viewer/密码工具、xdotool、FFmpeg 和字体。Debian12 示例：
-
-```sh
-# 在 Aide 实际运行环境内，以管理员身份明确执行：
-sh desktop/install-runtime.sh
-# 或自行构建仅含系统依赖的派生镜像；插件仍从市场单独安装：
-docker build -f desktop/Dockerfile.runtime --build-arg AIDE_BASE_IMAGE=aide:local -t aide:desktop-runtime .
-```
-
-脚本不由插件自动运行，不自动提权。其他发行版使用对应包名；可在插件设置中指定管理员准备的 `desktopRuntimeRoot`（含 usr/bin 或 bin 和库目录），留空使用系统依赖。每个会话启动认证的私有 Xvfb，不使用宿主 DISPLAY，不开启 X11 TCP监听，不共享宿主剪贴板或磁盘，最多同时4个桌面。用户名/域/证书指纹与媒体持久化在私有会话目录；插件不保存密码，VNC 临时认证文件在就绪后删除。停止/升级插件或 Aide 会结束连接，重新连接使用原记录和媒体，需再次输入密码，不恢复远端内存状态或自动重放操作。
-
-实际验收使用 Linux 隔离桌面、FreeRDP2/3 与 NLA、TigerVNC，覆盖 RDP/VNC 直连及实际 Python 加密中继、远端鼠标键盘事件、JPEG/MP4、隐藏会话及 Chromium1440/390布局。用户 Windows RDP 设备、实体设备和非 Linux 客户端未实测。完整 start.command 宿主页面、派生镜像构建和付费视觉模型调用未运行；原生宿主 ZIP/上下文测试与独立浏览器桥测试分别记录，见 `docs/desktop-verification.json`。
-
-开发验证：准备原生依赖后设置 `AIDE_DESKTOP_RUNTIME_ROOT=/path/to/runtime`，运行 `node --test --test-concurrency=1 test/*.test.js`；浏览器验收另设 `AIDE_EVIDENCE_DIR=/path/to/evidence` 后运行 `node test/browser-desktop.cjs`。未设置运行库时原生桌面测试明确标记 skip，不代表已通过。
+按用户要求撤回 RDP/VNC 功能，恢复1.4.2的 Shell、SSH、TCP、UDP、串口、加密中继、日志、可见性和手动重新连接。移除桌面类型、控制工具、截图录屏和桌面运行库设置，不再要求桌面原生依赖。1.5.0旧桌面记录和媒体留在私有存储中，不自动删除，当前版本不加载这些记录。升级会断开现有连接，其他会话和日志继续保留。
