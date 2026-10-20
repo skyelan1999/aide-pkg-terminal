@@ -8,6 +8,7 @@ async function open(config,mode='open'){
   // Self-signed relay identity is authenticated with an exact public-key pin
   // derived from the shared 256-bit key BEFORE any application data is sent.
   const socket=tls.connect({host:config.host,port:config.port,minVersion:'TLSv1.3',rejectUnauthorized:false});
+  socket.setNoDelay(true);
   let buffer=Buffer.alloc(0),step=0,finished=false;
   const fail=error=>{if(finished)return;finished=true;clearTimeout(timer);socket.destroy();reject(error);};
   const timer=setTimeout(()=>fail(Error('中继连接或认证超时')),12000);
@@ -17,5 +18,5 @@ async function open(config,mode='open'){
  });
 }
 function script(config){const template=fs.readFileSync(path.join(__dirname,'agent.py'),'utf8');return template.replace('__CONFIG_JSON__',()=>JSON.stringify(JSON.stringify(config)));}
-async function tunnel(config,onStatus){const active=new Set();const server=net.createServer(async local=>{active.add(local);local.on('error',()=>{});try{const remote=await open(config);active.add(remote);remote.on('error',()=>local.destroy());remote.on('close',()=>{active.delete(remote);local.destroy();});local.on('close',()=>{active.delete(local);remote.destroy();});local.pipe(remote).pipe(local);remote.resume();onStatus?.(true);}catch(_){onStatus?.(false);local.destroy();}});await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});return {port:server.address().port,close:()=>{for(const socket of active)socket.destroy();server.close();}};}
+async function tunnel(config,onStatus){const active=new Set();const server=net.createServer(async local=>{local.setNoDelay(true);active.add(local);local.on('error',()=>{});try{const remote=await open(config);active.add(remote);remote.on('error',()=>local.destroy());remote.on('close',()=>{active.delete(remote);local.destroy();});local.on('close',()=>{active.delete(local);remote.destroy();});local.pipe(remote).pipe(local);remote.resume();onStatus?.(true);}catch(_){onStatus?.(false);local.destroy();}});await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});return {port:server.address().port,close:()=>{for(const socket of active)socket.destroy();server.close();}};}
 module.exports={open,script,tunnel,keyBytes};

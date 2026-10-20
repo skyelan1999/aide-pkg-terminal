@@ -50,6 +50,7 @@ serial_lock=threading.Lock()
 def client(raw, context, key):
     connection=None; target=None; locked=False; started=False
     try:
+        raw.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
         raw.settimeout(10)
         connection=context.wrap_socket(raw,server_side=True)
         nonce=base64.b64encode(os.urandom(32)).decode()
@@ -73,7 +74,7 @@ def client(raw, context, key):
             target=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
             target.connect((CONFIG['host'],CONFIG['port']));target.settimeout(0.5)
         else:
-            target=socket.create_connection((CONFIG['host'],CONFIG['port']),timeout=10);target.settimeout(None)
+            target=socket.create_connection((CONFIG['host'],CONFIG['port']),timeout=10);target.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1);target.settimeout(None)
         send_json(connection,{'ok':True,'id':CONFIG['id'],'kind':kind})
         started=True
         connection.settimeout(None)

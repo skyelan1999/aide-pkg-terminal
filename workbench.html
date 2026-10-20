@@ -282,6 +282,13 @@ main{height:calc(100vh - 56px);grid-template-columns:238px minmax(0,1fr)}aside{p
   const panes = new Map(), pendingInput = new Map();
   let sessionFilter = 'all', workspaceMode = 'local';
   let sessions = [], selected = null, queue = Promise.resolve(), polling = false, paused = true, connected = false, stopped = false, exportId = 0, relayConnecting = false;
+  let pollTimer = null, pollRequested = false, interactiveUntil = 0;
+  function schedulePoll(delay = 0) {
+    clearTimeout(pollTimer);pollTimer=null;
+    if(paused||stopped)return;
+    if(polling){pollRequested=true;return;}
+    pollTimer=setTimeout(()=>{pollTimer=null;poll();},delay);
+  }
   const labels = {waiting:'等待中继部署',starting:'启动中',running:'运行中',exited:'已结束',interrupted:'后台已重启',error:'连接异常'};
   const communication=rec=>['tcp','tcp-server','udp','serial'].includes(rec?.kind);
   const endpoint=rec=>rec?.kind==='serial'?rec.devicePath:['tcp','tcp-server','udp'].includes(rec?.kind)?(rec.host||'127.0.0.1')+':'+rec.port+(rec.kind==='udp'?' · RX :'+rec.bindPort:''):rec?.kind!=='local'?rec.username+'@'+rec.host+':'+rec.port:'本地 · '+rec.cwd;
@@ -312,10 +319,11 @@ main{height:calc(100vh - 56px);grid-template-columns:238px minmax(0,1fr)}aside{p
     term.onData(data => {
       if (paused || selected !== id || sessions.find(s=>s.id===id)?.status !== 'running'||communication(sessions.find(s=>s.id===id))) return;
       let pending = pendingInput.get(id);
-      if (!pending) { pending={text:'',timer:null};pendingInput.set(id,pending); }
+      if (!pending) { pending={text:'',timer:null,sending:false};pendingInput.set(id,pending); }
+      interactiveUntil=Date.now()+1500;
       pending.text += data;
       if (pending.text.length > 65536) { pending.text='';paused=true;message('输入过多，已暂停发送；请检查设备后重新连接工作台');return; }
-      if (!pending.timer) pending.timer=setTimeout(()=>flushInput(id),70);
+      if (!pending.timer) pending.timer=setTimeout(()=>flushInput(id),8);
     });
     // Do not let a terminal silently request browser clipboard access (OSC 52).
     term.parser.registerOscHandler(52,()=>true);
@@ -323,14 +331,19 @@ main{height:calc(100vh - 56px);grid-template-columns:238px minmax(0,1fr)}aside{p
   }
   async function flushInput(id) {
     const pending=pendingInput.get(id);if(!pending)return;
-    pending.timer=null;const input=pending.text;pending.text='';
-    if(paused||!input)return;
+    pending.timer=null;if(pending.sending||paused||stopped)return;
+    pending.sending=true;
     try {
-      for(let start=0;start<input.length;start+=4096) {
-        if(paused)break;
-        await enqueue('input',{id,data:input.slice(start,start+4096)});
+      while(pending.text&&!paused&&!stopped){
+        const input=pending.text;pending.text='';
+        for(let start=0;start<input.length;start+=4096) {
+          if(paused||stopped)break;
+          await enqueue('input',{id,data:input.slice(start,start+4096)});
+          schedulePoll();
+        }
       }
     } catch(error) { paused=true;for(const p of pendingInput.values())p.text='';message('输入结果待核实，不会自动重发。'+error.message); }
+    finally {pending.sending=false;}
   }
   function render() {
     $('session-count').textContent=sessions.length+' / 32';
@@ -396,21 +409,27 @@ main{height:calc(100vh - 56px);grid-template-columns:238px minmax(0,1fr)}aside{p
     resizeTimer=setTimeout(()=>{if(!paused&&rec.status==='running')enqueue('resize',{id:rec.id,cols,rows}).catch(fail);},180);
   }
   async function poll() {
-    if(polling||paused||stopped)return;
+    if(paused||stopped)return;
+    if(polling){pollRequested=true;return;}
+    clearTimeout(pollTimer);pollTimer=null;
     polling=true;
+    let more=false;
     const id=selected,pane=panes.get(id);
     try {
       const result=await enqueue('poll',id?{id,offset:pane?.offset||0}:{});
       const signature=JSON.stringify(sessions);sessions=result.sessions;workspaceMode=result.workspace?.mode||'local';$('storage-path').textContent=result.storage||'.aide/terminal-workbench';$('kind').options[0].textContent=workspaceMode==='ssh'?'工作区 Shell · 已连接 SSH 主机':'工作区 Shell · Aide 本地环境';
       if(result.output&&pane) {
         if(result.output.reset){pane.term.reset();pane.term.writeln('\x1b[33m[恢复保留的输出尾部；完整记录请查看磁盘日志]\x1b[0m');}
-        pane.term.write(bytes(result.output.data));pane.offset=result.output.offset;
+        if(result.output.data)pane.term.write(bytes(result.output.data));pane.offset=result.output.offset;more=!!result.output.more;
+        if(result.output.data)interactiveUntil=Math.max(interactiveUntil,Date.now()+500);
       }
       if(!selected&&sessions.length){select(sessions[0].id);}else if(signature!==JSON.stringify(sessions))render();
     } catch(error) { paused=true;render();message('后台通信已暂停，已有会话可能仍在运行。'+error.message+'；请检查后重新打开工作台。'); }
-    finally {polling=false;}
+    finally {
+      polling=false;const immediate=pollRequested||more;pollRequested=false;
+      schedulePoll(document.hidden?1000:immediate?0:Date.now()<interactiveUntil?40:current()?.status==='running'?180:650);
+    }
   }
-  setInterval(poll,650);
   $('reconnect').onclick=async()=>{paused=false;$('notice').hidden=true;await poll();render();};
   bridge.onEvent(event=>{if(event.event==='scope.revoked'){paused=true;render();message('工作台授权已失效，请重新打开。');}});
   function openCreate(){syncRelay();if($('kind').value==='serial')refreshSerial();$('create-error').textContent='';$('create-dialog').showModal();$('create-form').elements.name.focus();}
@@ -474,7 +493,7 @@ main{height:calc(100vh - 56px);grid-template-columns:238px minmax(0,1fr)}aside{p
   $('relay-probe').onclick=async()=>{const rec=current();if(!rec?.relayEnabled)return;$('relay-probe').disabled=true;try{const result=await enqueue('relay_status',{id:rec.id});Object.assign(rec,result.session);render();}catch(error){fail(error);}finally{$('relay-probe').disabled=false;}};
   $('relay-connect').onclick=async()=>{const rec=current();if(!rec?.relayEnabled||relayConnecting)return;relayConnecting=true;$('relay-connect').disabled=true;try{const result=await enqueue('relay_connect',{id:rec.id,identityFile:rec.identityFile,identitySource:rec.identitySource});Object.assign(rec,result.session);select(rec.id);}catch(error){message('中继连接失败：'+error.message);}finally{relayConnecting=false;render();}};
   $('relay-script').onclick=async()=>{const rec=current();if(!rec?.relayEnabled)return;try{const result=await enqueue('relay_script',{id:rec.id});const output=bytes(result.data);window.parent.postMessage({type:'aide.workbench.export',protocol:1,pluginId:'terminal',requestId:'export_'+(++exportId),name:result.name,bytes:output.buffer},'*',[output.buffer]);}catch(error){fail(error);}};
-  setInterval(()=>{if(current()?.relayEnabled&&!paused&&!$('relay-probe').disabled)$('relay-probe').click();},15000);
+  setInterval(()=>{if(current()?.relayEnabled&&!sessions.some(rec=>rec.status==='running')&&!paused&&!$('relay-probe').disabled)$('relay-probe').click();},15000);
   $('logging').onclick=async()=>{const rec=current();if(!rec)return;try{const result=await enqueue('logging',{id:rec.id,enabled:!rec.logging});Object.assign(rec,result.session);render();}catch(error){fail(error);}};
   $('find').onclick=()=>{$('search-bar').hidden=false;$('search-input').focus();fitSelected();};
   $('search-close').onclick=()=>{$('search-bar').hidden=true;panes.get(selected)?.search.clearDecorations();fitSelected();};
@@ -529,7 +548,7 @@ main{height:calc(100vh - 56px);grid-template-columns:238px minmax(0,1fr)}aside{p
     }
   });
   window.parent.postMessage({type:'aide.workbench.theme.ready',protocol:1},'*');
-  window.addEventListener('pagehide',()=>{stopped=true;bridge.close();for(const p of pendingInput.values())clearTimeout(p.timer);});
+  window.addEventListener('pagehide',()=>{stopped=true;clearTimeout(pollTimer);bridge.close();for(const p of pendingInput.values())clearTimeout(p.timer);});
   render();bridge.connect().then(info=>{
     if(!['bridge.renew','daemon.detach'].every(x=>info.capabilities?.includes(x)))throw Error('请先更新 Aide：此工作台需要支持通信续期和常驻会话分离的宿主版本。');
     connected=true;paused=false;render();return poll();
