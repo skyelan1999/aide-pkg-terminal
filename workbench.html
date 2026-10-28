@@ -281,7 +281,7 @@ main{height:calc(100vh - 56px);grid-template-columns:238px minmax(0,1fr)}aside{p
   const $ = id => document.getElementById(id), bridge = AideWorkbenchClient.create('terminal');
   const panes = new Map(), pendingInput = new Map();
   let sessionFilter = 'all', workspaceMode = 'local';
-  let sessions = [], selected = null, queue = Promise.resolve(), polling = false, paused = true, connected = false, stopped = false, exportId = 0, relayConnecting = false, sessionReconnecting = false;
+  let sessions = [], selected = null, polling = false, paused = true, connected = false, stopped = false, exportId = 0, relayConnecting = false, sessionReconnecting = false;
   let pollTimer = null, pollRequested = false, interactiveUntil = 0;
   function schedulePoll(delay = 0) {
     clearTimeout(pollTimer);pollTimer=null;
@@ -295,16 +295,31 @@ main{height:calc(100vh - 56px);grid-template-columns:238px minmax(0,1fr)}aside{p
   const kinds={local:'本地 Shell / PTY',workspace:'SSH 工作区 / Shell',ssh:'SSH / OpenSSH',tcp:'TCP 客户端','tcp-server':'TCP 本地监听',udp:'UDP 数据报',serial:'串口 / UART'};
   const current = () => sessions.find(s => s.id === selected);
   const message = text => { $('notice').hidden = false; $('notice').querySelector('span').textContent = text; };
+  // Keep the host single-flight contract. Inputs may pass queued background work,
+  // but a bounded burst lets a waiting poll/export make progress as well.
+  const requests = {input: [], normal: []};
+  let dispatching = false, inputBurst = 0;
   function enqueue(tool, args={}) {
-    const request = queue.then(async () => {
-      if (stopped) throw Error('工作台已关闭');
-      if (!connected) throw Error('当前 Aide 尚未建立所需的常驻工作台通信，请更新 Aide 后重新打开');
-      const reply = await bridge.call('terminal_session_'+tool,args);
-      if (reply.status !== 'result') throw Error('操作未完成，请检查 Aide 中的待审批提案');
-      return reply.result;
+    return new Promise((resolve,reject)=>{
+      requests[tool==='input'?'input':'normal'].push({tool,args,resolve,reject});
+      if(!dispatching){dispatching=true;queueMicrotask(dispatch);}
     });
-    queue = request.catch(() => {});
-    return request;
+  }
+  async function dispatch() {
+    try {
+      while(requests.input.length||requests.normal.length) {
+        const urgent=requests.input.length&&(!requests.normal.length||inputBurst<8);
+        const job=requests[urgent?'input':'normal'].shift();
+        inputBurst=urgent?inputBurst+1:0;
+        try {
+          if(stopped)throw Error('工作台已关闭');
+          if(!connected)throw Error('当前 Aide 尚未建立所需的常驻工作台通信，请更新 Aide 后重新打开');
+          const reply=await bridge.call('terminal_session_'+job.tool,job.args);
+          if(reply.status!=='result')throw Error('操作未完成，请检查 Aide 中的待审批提案');
+          job.resolve(reply.result);
+        } catch(error) {job.reject(error);}
+      }
+    } finally {dispatching=false;inputBurst=0;}
   }
   function fail(error) { message(error.message || String(error)); }
   function confirmAction(text){return new Promise(resolve=>{const dialog=$('confirm-dialog');$('confirm-message').textContent=text;dialog.onclose=()=>resolve(false);$('confirm-cancel').onclick=()=>dialog.close();$('confirm-accept').onclick=()=>{resolve(true);dialog.close();};dialog.showModal();$('confirm-cancel').focus();});}
