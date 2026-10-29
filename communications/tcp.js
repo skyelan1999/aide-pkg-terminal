@@ -242,21 +242,26 @@ module.exports = {
         if (state.listeners.has(listenPort)) throw new Error('本地端口已被监听占用: ' + listenPort);
         const proxyId = 'proxy-' + (++state.proxySeq);
         return new Promise((resolve, reject) => {
-          const server = net.createServer((front) => {
-            const back = net.createConnection({ host: targetHost, port: targetPort });
+          const server = net.createServer({ allowHalfOpen: true }, (front) => {
+            // Refuse excess peers before opening an upstream connection.
+            if (state.connections.size >= 32) { front.destroy(); return; }
+            const back = net.createConnection({ host: targetHost, port: targetPort, allowHalfOpen: true });
             const rec = newRecording(listenPort, 'proxy');
             const frontEntry = registerSocket(front, { role: 'proxy-front', recording: rec });
-            // front -> back（c2s 已由 registerSocket 记录）：仅转发
-            front.on('data', (buf) => { try { back.write(buf); } catch (_) {} });
             back.on('data', (buf) => {
               recordFrame(rec, 's2c', buf);
               ctx.emit('traffic', { direction: 'in', connectionId: frontEntry.connectionId, recordingId: rec.id, length: buf.length, payloadTruncated: buf.length > MAX_PREVIEW, time: nowIso() });
-              try { front.write(buf); } catch (_) {}
             });
+            // pipe pauses each readable when the peer's writable queue reaches
+            // its high-water mark, then resumes on drain. Keep traffic hooks
+            // observational so they cannot bypass that flow control.
+            front.pipe(back);
+            back.pipe(front);
             const teardown = () => { try { front.destroy(); } catch (_) {} try { back.destroy(); } catch (_) {} };
             back.on('error', teardown);
             front.on('error', teardown);
             back.on('close', teardown);
+            front.on('close', teardown);
           });
           server.on('error', (err) => reject(new Error('代理监听失败: ' + (err && err.message))));
           server.listen(listenPort, BOUND_HOST, () => {
