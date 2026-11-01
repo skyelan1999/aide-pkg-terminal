@@ -1,0 +1,23 @@
+{
+  "stage": "reviewed local candidate, not published",
+  "plugin": "terminal",
+  "version": "1.5.3",
+  "package": {
+    "file": "packages/v1.5.3/aide-pkg-terminal-v1.5.3.zip",
+    "bytes": 1063899,
+    "sha256": "0f6810cf1e637621aca25b414af5fafb1db089134653dd8e7b8aedef4df43813"
+  },
+  "runtime": "isolated Linux ARM64 / Node 24.19.0",
+  "sourceChecks": {
+    "sourceTests": "36/36 pass, no skips",
+    "extractedRuntime": "27/27 pass, no skips",
+    "slowReceiver": "32 MiB each direction, source paused, observed writable queue 65536 bytes, final length/SHA256 equal"
+  },
+  "hostInstall": "Actual Aide bundle upload and handler/native execution fixture passed; synthetic data only. Candidate catalog is explicitly not published; not a final Release receipt.",
+  "nativeCi": "Both native Linux architectures are required by the PR workflow before integration; see PR checks for current status.",
+  "limits": [
+    "No customer data, paid model or physical hardware",
+    "No production deployment",
+    "Final Aide Release still requires all 30 current public packages on both native architectures"
+  ]
+}

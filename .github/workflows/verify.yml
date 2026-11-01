@@ -1,0 +1,38 @@
+name: Verify Terminal runtime
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+concurrency:
+  group: terminal-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned test prerequisites
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          python3 -m pip install pyserial==3.5 cryptography==50.0.2
+      - name: Execute source and extracted-runtime regressions
+        run: |
+          node --version
+          npm run build
+          git diff --exit-code -- workbench.html
+          npm test
+          python3 scripts/package.py
+          cmp dist/aide-pkg-terminal-v1.5.3-candidate.zip packages/v1.5.3/aide-pkg-terminal-v1.5.3.zip
+          python3 scripts/verify_package.py packages/v1.5.3/aide-pkg-terminal-v1.5.3.zip
