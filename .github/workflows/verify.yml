@@ -26,7 +26,7 @@ jobs:
       - name: Install pinned test prerequisites
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          python3 -m pip install pyserial==3.5
+          python3 -m pip install pyserial==3.5 cryptography==50.0.2
       - name: Execute source and extracted-runtime regressions
         run: |
           node --version
