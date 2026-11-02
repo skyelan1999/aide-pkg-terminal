@@ -1,5 +1,7 @@
 # Terminal 1.6.0 候选验证记录
 
+配套审阅：[Terminal PR #3](https://github.com/skyelan1999/aide-pkg-terminal/pull/3)、[Aide宿主 PR #731](https://github.com/skyelan1999/aide/pull/731)。
+
 范围：未发布功能分支；旧公开1.5.3包、市场和已发布Aide附件未修改。关联 Aide #726/#728/#730。
 
 | 验证 | 结果 | 证据与边界 |
@@ -10,7 +12,7 @@
 | 长粘贴边界 | PASS direct + TLS relay | 同一段16383字节前缀+CRLF，整段与在CR/LF中间分两次输入，真实服务端收到逐字节一致且仅一个换行 |
 | X11 通路 | PASS direct + TLS relay | 真实OpenSSH、合成xauth helper、合成X11 endpoint；包含SSH副本独立、主机校验与认证帧。三者不能代替真实XServer |
 | 宿主实际安装 | PASS 2/2 | 配套Aide将本候选实际装入隔离App/Node daemon；PTY复制、可见性、Telnet真实连接及动态禁用发送、既有工具兼容 |
-| 宿主 focused Go race | PASS 8/8，0 skip，11.463s | 包含上述安装2项和规范context/主socket等6项；go vet ./internal/server PASS |
+| 宿主 focused Go race | PASS 8/8，0 skip，11.308s | 包含上述安装2项和规范context/主socket等6项；go vet ./internal/server PASS |
 | 静态/生成物 | PASS | JS语法、git diff --check、重建workbench一致、候选ZIP结构与依赖自检 |
 | 真实 X Server 窗口、用户 Telnet 设备、硬件/原生Windows | NOT_RUN | 本机无XQuartz/native XServer，不安装/改权限冒充验证 |
 | 新宿主 runtime 镜像 | NOT_RUN | Dockerfile增加xauth，但未重建或部署；旧SDK上的合成helper不证明新镜像包含依赖 |
