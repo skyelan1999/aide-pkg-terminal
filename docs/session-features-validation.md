@@ -11,7 +11,8 @@
 | 浏览器 UI | PASS | 实际生成HTML +真实Sessions +loopback Telnet；1440/390px、light/dark各一组，输入/复制并连接/关闭隔离/只复制设置/独立SSH X11前提表单 |
 | 长粘贴边界 | PASS direct + TLS relay | 同一段16383字节前缀+CRLF，整段与在CR/LF中间分两次输入，真实服务端收到逐字节一致且仅一个换行 |
 | X11 通路 | PASS direct + TLS relay | 真实OpenSSH、合成xauth helper、合成X11 endpoint；包含SSH副本独立、主机校验与认证帧。三者不能代替真实XServer |
-| 宿主实际安装 | PASS 2/2 | 配套Aide将本候选实际装入隔离App/Node daemon；PTY复制、可见性、Telnet真实连接及动态禁用发送、既有工具兼容 |
+| 宿主原始ZIP安装 | PASS 1/1，Go race 3.060s | multipart直接io.Copy原始候选文件，不重构ZIP；日志记录1,071,285bytes及5139e8...SHA，断言PTY复制、隐藏权限、Telnet真实连接与动态禁用发送 |
+| 宿主既有安装回归 | PASS 1/1 | 既有夹具将ZIP成员内容重新封装上传，验证原有工具和可见性兼容；不将它当作原档字节身份验收 |
 | 宿主 focused Go race | PASS 8/8，0 skip，11.308s | 包含上述安装2项和规范context/主socket等6项；go vet ./internal/server PASS |
 | 静态/生成物 | PASS | JS语法、git diff --check、重建workbench一致、候选ZIP结构与依赖自检 |
 | 真实 X Server 窗口、用户 Telnet 设备、硬件/原生Windows | NOT_RUN | 本机无XQuartz/native XServer，不安装/改权限冒充验证 |
@@ -23,6 +24,6 @@
 - 测试 SDK `sha256:cbdab7d49e30518d58f6c61adc3b73d3be3d314e8d0ec2c283dbd4facb92b8ee`，隔离容器network=none；loopback测试仅容器内。pyserial3.5仅装入测试临时目录，宿主未全局安装依赖。
 - 浏览器桥上下文与保存的工作区profile是夹具；真实宿主安装另外验证。剪贴板是合成ClipboardEvent，不操作系统剪贴板。
 
-本地证据保存在工作树被忽略的 `.agent-state/evidence/final-source-tests.log`、`final-extracted-runtime.log`、`final-browser.log` 与 `.agent-state/session-feature-browser/report.json`/PNG。配套宿主 `.agent-state/host-final-regression.log` 末尾 EXIT0；OPERATION_FAILED记录来自预期隐藏权限/禁用输入负向断言。旧失败证据保留，不用新PASS覆盖其事实：#730修复前真实ControlPath过长、早期合成X11 helper夹具格式问题、旧浏览器输入夹具问题均不作为最终通过记录。
+本地证据保存在工作树被忽略的 `.agent-state/evidence/final-source-tests.log`、`final-extracted-runtime.log`、`final-browser.log` 与 `.agent-state/session-feature-browser/report.json`/PNG。配套宿主 `.agent-state/host-final-regression.log` 与原档 `.agent-state/host-original-zip-regression.log` 均末尾 EXIT0；OPERATION_FAILED记录来自预期隐藏权限/禁用输入负向断言。旧失败证据保留，不用新PASS覆盖其事实：#730修复前真实ControlPath过长、早期合成X11 helper夹具格式问题、旧浏览器输入夹具问题均不作为最终通过记录。
 
 CI将继续在LinuxAMD64/ARM64运行源与解包套件，在Chromium运行UI；远端结果必须另看PR状态。以上本地通过不等于远端CI通过或发布授权。
