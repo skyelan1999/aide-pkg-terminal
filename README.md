@@ -1,10 +1,10 @@
 # Terminal · Aide 设备终端工作台
 
-**1.5.3 预发布，需配套宿主能力。** 统一 Shell、SSH、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**开发候选 1.6.0，尚未发布；公开下载仍为未改变的 1.5.3。** 新增功能需要配套宿主分支。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
 
 ## 安装预发布版
 
-从 [v1.5.3 预发布](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.5.3) 说明中的固定提交链接下载 ZIP 和 SHA256SUMS，经 `sha256sum -c SHA256SUMS` 校验后导入。安装包托管在仓库 `packages/v1.5.3/`，Release 提供下载链接，没有另行上传二进制附件。请先采用配套宿主源码构建；当前公开旧宿主不能完整使用此工作台。
+从 [v1.5.3 预发布](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.5.3) 说明中的固定提交链接下载 ZIP 和 SHA256SUMS，经 `sha256sum -c SHA256SUMS` 校验后导入。安装包托管在仓库 `packages/v1.5.3/`，Release 提供下载链接，没有另行上传二进制附件。公开1.5.3按其说明使用配套宿主；本分支1.6.0的新复制接口与X11依赖另需配套宿主功能分支，不能以公开下载替代新功能候选。
 
 插件新标签页入口已移除；后台会话、日志及 Aide 管理能力继续保留。宿主界面变更需要更新 Aide main 源码构建，单独升级插件不会替换宿主界面。
 
@@ -153,3 +153,9 @@ Shell/SSH 命令、设备收发与日志仍沿用原会话机制；中继在线�
 ## 1.5.3：TCP 代理背压（Aide #588）
 
 双向 pipe 随接收端的 drain 暂停/恢复来源，保留半关闭，错误或关闭时清理两端；连接数超额时先拒绝再建后端。真实慢接收端回归在两个方向各发送 32 MiB，验证拥塞时来源暂停、队列受控和恢复后的长度/SHA256 一致。该观测不是所有 OS 的固定队列上限。保留 1.5.2 输入调度修复；安装/升级会结束现有设备连接，不自动重放输入。
+
+## 1.6.0 开发候选：会话复制、Telnet 与 X11
+
+尚未发布，需配套宿主支持。新增独立会话复制/复制并连接、复用同一已部署中继的独立会话、Telnet 直连及中继协议处理、独立 SSH 的非信任 X11 转发。X11 需要已有可达 X Server、运行环境及远端 xauth 与有效 Xauthority，不能把协议通路验证当作真实窗口验收。
+
+完整操作、Docker 只读认证文件示例、权限/兼容/回滚和验证边界见 [会话功能说明](https://github.com/skyelan1999/aide-pkg-terminal/blob/feat/session-copy-x11-telnet/docs/session-features.md)。真实 X Server 窗口与用户设备验收尚未运行；公开1.5.3未改变。

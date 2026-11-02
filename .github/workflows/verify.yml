@@ -34,5 +34,24 @@ jobs:
           git diff --exit-code -- workbench.html
           npm test
           python3 scripts/package.py
-          cmp dist/aide-pkg-terminal-v1.5.3-candidate.zip packages/v1.5.3/aide-pkg-terminal-v1.5.3.zip
-          python3 scripts/verify_package.py packages/v1.5.3/aide-pkg-terminal-v1.5.3.zip
+          version=$(node -p "require('./manifest.json').version")
+          python3 scripts/verify_package.py "dist/aide-pkg-terminal-v${version}-candidate.zip"
+          (cd packages/v1.5.3 && sha256sum --check SHA256SUMS)
+
+  workbench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: node test/browser-session-features.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: terminal-session-feature-ui
+          path: .agent-state/session-feature-browser

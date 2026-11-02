@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.0（开发候选，未发布）
+
+- 独立会话复制设置/复制并连接；共享既有固定目标中继，PTY、连接和日志独立。
+- Telnet 直连/中继的流式 IAC、NVT、ECHO/SGA、TTYPE、NAWS、BINARY 处理，断开取消及动态发送禁用检查。
+- 独立 SSH 直连/中继可显式请求非信任 X11，验证 DISPLAY/xauth/Xauthority；工作区 SSH 可预填公开配置后新建独立连接并重新认证。
+- 修复遗漏部分会话类型的侧栏分组（Aide #728），复用宿主规范短 SSH socket 并核对原 master inode（#730）。
+- 源码/实际 ZIP/隔离宿主安装/真实 Chromium 回归；真实 X Server GUI、硬件与用户设备保持 NOT_RUN。详见 docs/session-features.md。
+
 ## 1.5.1（预发布）
 
 - 按用户要求移除 RDP/VNC，恢复1.4.2终端工作台。

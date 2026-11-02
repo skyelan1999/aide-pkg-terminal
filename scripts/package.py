@@ -7,7 +7,7 @@ import zipfile
 import subprocess
 root = Path(__file__).resolve().parents[1]
 manifest = json.loads((root / 'manifest.json').read_text())
-names = ['index.js', 'sessions.js', 'pty-worker.py', 'manifest.json', 'workbench.html', 'README.md', 'LICENSE']
+names = ['index.js', 'sessions.js', 'telnet.js', 'x11.js', 'pty-worker.py', 'manifest.json', 'workbench.html', 'README.md', 'LICENSE']
 names += ['package.json', 'relay/client.js', 'relay/agent.py']
 names += [str(p.relative_to(root)) for p in (root/'communications').glob('*.js')]
 names += [str(p.relative_to(root)) for p in (root / 'vendor').glob('*-LICENSE')]
