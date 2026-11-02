@@ -1,4 +1,39 @@
-# Terminal 1.6.0 候选验证记录
+# Terminal 1.6.0 发行验证记录
+
+发行状态以 GitHub Release 为准；归档准备、PR通过和本文件均不等同于已发布。配套 Aide 最低版本 **0.1.18.0 RC2**，无 sourceCompatibility 降低门槛；可供市场引用的元数据在 [release/market-compatibility.json](../release/market-compatibility.json)。
+
+## 阶段二：正式归档与真实 X Server 验证
+
+正式归档 `packages/v1.6.0/aide-pkg-terminal-v1.6.0.zip`：
+- **1,071,482 bytes**
+- SHA256 **`c682f56ff469212b8da7f5e4e9e25052d5d8248c3f298345611558578c2b149b`**
+- ZIP CRC、167成员与关键运行文件同源码逐字节检查通过；历史1.5.3归档不变。准备命令 `python3 scripts/package.py --release` 不发布且拒绝替换不同的版本归档。
+
+| 验证 | 实测结果 | 范围 |
+| --- | --- | --- |
+| 源码回归 | PASS56/56，0skip，13.974s | 普通UID1000、隔离LinuxARM64，非root运行；最终README中性状态调整未变产品JS，不重复跑此项 |
+| 正式归档解包回归 | PASS53/53，0skip，14.398s | 仅加载该正式ZIP解包运行时及捆绑production dependencies |
+| 正式归档真实X11窗口 | PASS2/2，0skip，1.675s | 真实Xvfb、真实xauth、真实OpenSSH客户端和服务端、实际xmessage；直连与TLS relay复制会话在关闭源连接后显示窗口 |
+| 浏览器 | PASS | 同字节最终生成HTML，1440/390px × light/dark，真实Sessions与loopback Telnet；复制/连接/关闭隔离、输入、前提表单，零pageerror |
+| 原始ZIP App/daemon安装与RC2兼容 | 主程序发行门禁单独记录 | 应直接multipart上传该SHA原档，不用重封装夹具代替原档身份；配套Aide PR731/RC2发行账本为准 |
+| macOS XQuartz、用户设备、硬件/原生Windows | NOT_RUN | Linux虚拟X Server真实渲染不等同于上述真机环境 |
+| 主程序发行runtime镜像 | 独立门禁 | 插件QA镜像不替代Aide RC2正式runtime的xauth/双架构验收 |
+
+真实窗口证据：
+- [直连PNG](images/x11-direct.png)、[中继副本PNG](images/x11-relay.png)。
+- 窗口树真实标题 `AIDE-REAL-X11-direct` / `AIDE-REAL-X11-relay`，实际屏幕800×600；不是绘制的UI样稿或合成X11应答。
+- 客户端UID1000；原认证文件权限0400、内容和inode保持不变；Xvfb只监听Unix socket并启用cookie认证；sshd只监听容器loopback、public-key认证、StrictModes保持开启。未使用xhost+。
+- 新CI `x11-render` 从正式ZIP解包执行相同真实窗口断言，输出PNG、xwd、window-tree和JSON artifact。普通runtime AMD64/ARM64与浏览器CI仍保留。
+- 本地QA镜像 `sha256:6eb1ce0dbcce99809e00488f16b783c4dda4bb6224b7ddd65578543052377534`。Debian依赖通过官方签名InRelease与包校验，以TLS下载；未改宿主DNS/代理/授权，未安装XQuartz，未重启生产。
+- 初次真实sshd夹具把authorized_keys放在/tmp而被StrictModes拒绝，随后改为设备用户home/.ssh并保留StrictModes；失败历史日志保留，不掩盖为首轮通过。
+
+本地日志：`.agent-state/evidence/release-source-tests.log`、`release-extracted-runtime-x11-final.log`、`release-browser.log`、`real-x11-final/{direct,relay}-window-tree.txt`、`{direct,relay}-report.json`。用户认证cookie/私钥不进入这些证据或Git。所有一次性测试容器结束后移除。
+
+中间d3a549准备归档因README状态文字中性化而作废，未提交/发布，移存在被忽略的 `.agent-state/evidence/pre-final-readme-archive/`，不覆盖已发行1.5.3。
+
+## 阶段一：历史候选验证
+
+下方记录保留先前5139e8候选的身份与测试事实，不把它冒充当前c682f5正式归档。
 
 配套审阅：[Terminal PR #3](https://github.com/skyelan1999/aide-pkg-terminal/pull/3)、[Aide宿主 PR #731](https://github.com/skyelan1999/aide/pull/731)。
 

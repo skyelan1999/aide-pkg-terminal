@@ -1,6 +1,6 @@
-# 会话复制、Telnet 与 X11（1.6.0 开发候选）
+# 会话复制、Telnet 与 X11（1.6.0）
 
-本功能尚未发布，不能以当前公开的 1.5.3 包作为已包含功能的证据。配套 Aide 需要提供可信的 `sessionCopyVersion: 1` 上下文；旧宿主仍可使用既有功能，但复制入口禁用并提示升级。相关需求与缺陷：[726](https://github.com/skyelan1999/aide/issues/726)、[728](https://github.com/skyelan1999/aide/issues/728)、[730](https://github.com/skyelan1999/aide/issues/730)。
+发行状态以 GitHub v1.6.0 Release 为准，需要 Aide v0.1.18.0-RC2+；市场最低版本为0.1.18.0 RC2，不提供sourceCompatibility降级。归档位于packages/v1.6.0/，不能以旧1.5.3包作为新功能证据。配套 Aide 提供可信的 `sessionCopyVersion: 1` 上下文；旧宿主复制入口禁用并提示升级。手动导入ZIP绕过市场版本检查，应先升级宿主。相关需求与缺陷：[726](https://github.com/skyelan1999/aide/issues/726)、[728](https://github.com/skyelan1999/aide/issues/728)、[730](https://github.com/skyelan1999/aide/issues/730)。
 
 ## 使用复制
 
@@ -60,17 +60,25 @@ services:
 
 ## 验证与边界
 
-候选验证入口：
+验证入口：
 
 - `npm test`：源运行时 56 项，无跳过；覆盖真实 Linux PTY、OpenSSH、TCP/UDP、虚拟串口、背压及上述新协议/隔离回归。
-- `python3 scripts/package.py` + `python3 scripts/verify_package.py dist/aide-pkg-terminal-v1.6.0-candidate.zip`：解包实际候选运行，不借用源码模块/宿主 node_modules。
+- `python3 scripts/package.py --release` + `python3 scripts/verify_package.py packages/v1.6.0/aide-pkg-terminal-v1.6.0.zip`：解包实际候选运行，不借用源码模块/宿主 node_modules。
 - `node test/browser-session-features.cjs`：真实 Chromium 与 Sessions 后端、loopback Telnet，1440/390px、明暗两套界面。剪贴板测试为合成 ClipboardEvent，不读取系统剪贴板。
 - 配套 Aide：`AIDE_TERMINAL_FEATURE_BUNDLE_PATH=<候选绝对路径> go test ./internal/server -run TestTerminalSessionFeaturesInstalledCandidate`，将实际 ZIP 安装到隔离 App/daemon，验证复制、隐藏授权、真实 Telnet 与动态禁用发送。
 - `test/x11.test.js`：真实 OpenSSH 直连/中继，合成 xauth helper、合成 X11 endpoint 验证通路与认证字节，不能作为真实 X Server 窗口显示验收。
 - `test/ssh-auth.test.js`：真实 workspace SSH master 和长私有路径，验证规范短 socket 与原 master inode/身份一致；不同 inode/软链接拒绝，不靠用户旗标放宽。
 
-真实 macOS XQuartz/native X Server 窗口、真实设备 Telnet、硬件串口及 Windows 原生功能：NOT_RUN。新增宿主 runtime 镜像未在本轮重建/部署；不能以现存 SDK 的合成 xauth 测试代替新镜像依赖或真实 GUI 验收。跨平台真实运行仍须按发行门禁验收。
+真实 Linux Xvfb + xauth + OpenSSH + xmessage 的直连与 TLS relay 窗口显示已通过；见下节强验证。真实 macOS XQuartz、用户设备 Telnet、硬件串口及 Windows 原生功能：NOT_RUN。宿主正式 runtime 镜像的 xauth 依赖由 Aide RC2 主程序发行门禁单独验收，不能以插件 QA 镜像替代。跨平台真实运行仍须按发行门禁验收。
 
 ## 回滚与兼容
 
-保持现行公开包与市场不变；安装候选前备份 Aide 私有终端数据，插件重载会断开连接，不重放输入。退回旧插件后 Telnet 新类型不会被旧版本加载，但不应删除私有记录/日志/共享中继密钥；原有支持的会话仍可使用。配套宿主只新增规范上下文字段与 runtime 依赖，旧插件继续忽略新字段。不要同时启动两个实例写同一私有状态目录。
+打包命令不自动发布/修改市场；安装前备份 Aide 私有终端数据，插件重载会断开连接，不重放输入。退回旧插件后 Telnet 新类型不会被旧版本加载，但不应删除私有记录/日志/共享中继密钥；原有支持的会话仍可使用。配套宿主只新增规范上下文字段与 runtime 依赖，旧插件继续忽略新字段。不要同时启动两个实例写同一私有状态目录。
+
+## 真实 X11 窗口强验证
+
+`scripts/test-x11-live.py` 只允许显式开启的 Docker 隔离环境，以正常 UID1000 运行插件客户端，启动真实 cookie 认证的 Xvfb、真实xauth、仅loopback监听的OpenSSH服务，以及实际xmessage客户端。Xvfb仅Unix socket，不使用xhost+；SSH StrictModes与主机指纹确认保留。用户提供的Xauthority副本0400且内容/inode保持不变。直连显示窗口，中继副本关闭源连接后仍可显示窗口，保存xwd/PNG、xwininfo窗口树和JSON记录。
+
+CI额外构建测试专用Dockerfile.x11，以network=none执行正式ZIP解包运行时，再运行真实窗口测试。QA镜像不会替代Aide服务，不安装宿主XQuartz、不改系统授权或外部监听。这是Linux虚拟X Server实际渲染，不能等同于macOS XQuartz或真实用户设备验收。
+
+![通过中继实际显示的X客户端](images/x11-relay.png)

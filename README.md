@@ -1,10 +1,12 @@
 # Terminal · Aide 设备终端工作台
 
-**开发候选 1.6.0，尚未发布；公开下载仍为未改变的 1.5.3。** 新增功能需要配套宿主分支。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**1.6.0；实际发行状态以 GitHub Release 为准。** 要求配套 Aide **v0.1.18.0-RC2 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
 
-## 安装预发布版
+## 安装与兼容
 
-从 [v1.5.3 预发布](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.5.3) 说明中的固定提交链接下载 ZIP 和 SHA256SUMS，经 `sha256sum -c SHA256SUMS` 校验后导入。安装包托管在仓库 `packages/v1.5.3/`，Release 提供下载链接，没有另行上传二进制附件。公开1.5.3按其说明使用配套宿主；本分支1.6.0的新复制接口与X11依赖另需配套宿主功能分支，不能以公开下载替代新功能候选。
+以 [v1.6.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.6.0) 是否公开为发行状态依据。正式归档位于 `packages/v1.6.0/aide-pkg-terminal-v1.6.0.zip` 和同目录 `SHA256SUMS`；发布后从 Release 说明的固定提交链接下载，校验 `sha256sum -c SHA256SUMS` 后导入。仅出现仓库文件或本段说明不表示已公开发行。
+
+需要 **Aide v0.1.18.0-RC2+**。市场元数据最低版本为 `0.1.18.0 RC2`，不提供降低门槛的 sourceCompatibility；旧 RC1 不应自动升级至此版本。手动 ZIP 导入不经过市场门槛，请先升级宿主。运行时 `sessionCopyVersion=1` 仍作复制入口二次检查。归档不打包 xauth/X Server，部署前提见下方说明。历史1.5.3归档保持不变。
 
 插件新标签页入口已移除；后台会话、日志及 Aide 管理能力继续保留。宿主界面变更需要更新 Aide main 源码构建，单独升级插件不会替换宿主界面。
 
@@ -154,8 +156,8 @@ Shell/SSH 命令、设备收发与日志仍沿用原会话机制；中继在线�
 
 双向 pipe 随接收端的 drain 暂停/恢复来源，保留半关闭，错误或关闭时清理两端；连接数超额时先拒绝再建后端。真实慢接收端回归在两个方向各发送 32 MiB，验证拥塞时来源暂停、队列受控和恢复后的长度/SHA256 一致。该观测不是所有 OS 的固定队列上限。保留 1.5.2 输入调度修复；安装/升级会结束现有设备连接，不自动重放输入。
 
-## 1.6.0 开发候选：会话复制、Telnet 与 X11
+## 1.6.0：会话复制、Telnet 与 X11
 
-尚未发布，需配套宿主支持。新增独立会话复制/复制并连接、复用同一已部署中继的独立会话、Telnet 直连及中继协议处理、独立 SSH 的非信任 X11 转发。X11 需要已有可达 X Server、运行环境及远端 xauth 与有效 Xauthority，不能把协议通路验证当作真实窗口验收。
+发行状态以 Release 为准，需配套 Aide v0.1.18.0-RC2+。新增独立会话复制/复制并连接、复用同一已部署中继的独立会话、Telnet 直连及中继协议处理、独立 SSH 的非信任 X11 转发。X11 需要已有可达 X Server、运行环境及远端 xauth 与有效 Xauthority，不能把协议通路验证当作真实窗口验收。
 
-完整操作、Docker 只读认证文件示例、权限/兼容/回滚和验证边界见 [会话功能说明](https://github.com/skyelan1999/aide-pkg-terminal/blob/feat/session-copy-x11-telnet/docs/session-features.md)。真实 X Server 窗口与用户设备验收尚未运行；公开1.5.3未改变。
+完整操作、Docker 只读认证文件示例、权限/兼容/回滚和验证边界见 [会话功能说明](https://github.com/skyelan1999/aide-pkg-terminal/blob/v1.6.0/docs/session-features.md)。真实 Linux Xvfb、xauth、OpenSSH 与 xmessage 的直连/中继窗口显示已在隔离容器通过；macOS XQuartz、用户设备、原生 Windows 仍未验收。历史1.5.3归档未改变。
