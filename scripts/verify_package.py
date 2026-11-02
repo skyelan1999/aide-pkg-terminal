@@ -9,6 +9,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('archive', type=Path)
+parser.add_argument('--live-x11', action='store_true', help='also run real Xvfb/xauth/sshd rendering; invoke through the isolated X11 QA wrapper')
 args = parser.parse_args()
 with tempfile.TemporaryDirectory(prefix='aide-terminal-runtime-') as temporary:
     target = Path(temporary)
@@ -22,7 +23,12 @@ with tempfile.TemporaryDirectory(prefix='aide-terminal-runtime-') as temporary:
             destination.write_bytes(archive.read(item))
     tests = target / 'test'
     tests.mkdir()
-    for name in ['communications.test.js', 'communications-security.test.js', 'ssh-auth.test.js', 'serial-devices.test.js', 'relay.test.js', 'reconnect.test.js', 'withdrawn-desktop.test.js', 'tcp-proxy-backpressure.test.js']:
+    for name in ['sessions.test.js', 'ssh.test.js', 'communications.test.js', 'communications-security.test.js', 'ssh-auth.test.js', 'serial-devices.test.js', 'relay.test.js', 'reconnect.test.js', 'withdrawn-desktop.test.js', 'tcp-proxy-backpressure.test.js', 'telnet.test.js', 'session-copy.test.js', 'x11.test.js', 'session-feature-fixture.js']:
         shutil.copyfile(root / 'test' / name, tests / name)
     subprocess.run(['node', '--test', *[str(file) for file in sorted(tests.glob('*.test.js'))]], cwd=target, check=True)
     print('PASS: tests loaded only the extracted runtime and its bundled production dependencies')
+    if args.live_x11:
+        for name in ('x11-live.cjs', 'xwd-to-png.py'):
+            shutil.copyfile(root / 'test' / name, tests / name)
+        subprocess.run(['node', str(tests / 'x11-live.cjs')], cwd=target, check=True)
+        print('PASS: real X11 rendering loaded only the extracted runtime')

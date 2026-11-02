@@ -1,0 +1,49 @@
+'use strict';
+// Real generated HTML and Sessions backend in a disposable browser. The bridge
+// fixture supplies a trusted host context; this is not installed-Aide acceptance.
+const {chromium}=require('playwright'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const {workspace,telnetServer,until}=require('./session-feature-fixture');
+const out=process.env.AIDE_EVIDENCE_DIR||path.join(__dirname,'../.agent-state/session-feature-browser');fs.mkdirSync(out,{recursive:true});
+(async()=>{
+  const cleanup=[],t={after:fn=>cleanup.push(fn)},f=workspace(t),server=await telnetServer(t);
+  const tcp=(await f.m.create(f.ui,{kind:'tcp',name:'TCP visible group',host:'127.0.0.1',port:server.port})).session;
+  const waiting=(await f.m.create(f.ui,{kind:'telnet',name:'Relay waiting group',host:'127.0.0.1',port:server.port,relay:{enabled:true,host:'127.0.0.1',port:17780,key:crypto.randomBytes(32).toString('base64')}})).session;
+  const workspaceID='e'.repeat(24),space=f.m.space(f.ui);space.records.set(workspaceID,{id:workspaceID,kind:'workspace',name:'Workspace profile',host:'workspace.example.invalid',port:22,username:'device',status:'saved',cwd:'.',cols:100,rows:30,createdAt:new Date().toISOString(),logging:true,history:Buffer.alloc(0),base:0,offset:0,worker:null});
+  const browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{}),args:['--no-sandbox','--disable-dev-shm-usage']});
+  const errors=[],checks=[];let page;
+  try{
+    page=await browser.newPage({viewport:{width:1440,height:1000}});page.on('pageerror',e=>errors.push(e.message));
+    await page.exposeFunction('terminalCall',async(tool,args)=>{const action=tool.replace(/^terminal_session_/,''),methods={input:'send',relay_connect:'reconnect',relay_script:'relayScript',relay_status:'relayStatus',delete:'remove'};if(action==='files')return{status:'result',result:{sources:[{id:'',name:'Workspace'}],source:'',path:'.',entries:[]}};if(action==='comm')return {status:'result',result:await f.m.commCall(f.ui,args)};const method=methods[action]||action;assert.equal(typeof f.m[method],'function',tool);return{status:'result',result:await f.m[method](f.ui,args)};});
+    await page.addInitScript(()=>{window.fixtureClient={connect:async()=>({capabilities:['bridge.renew','daemon.detach']}),onEvent(){},close(){},call:(name,args)=>window.terminalCall(name,args)};});
+    const html=fs.readFileSync(path.join(__dirname,'../workbench.html'),'utf8').replace("bridge = AideWorkbenchClient.create('terminal')","bridge = window.fixtureClient");assert(html.includes('bridge = window.fixtureClient'));
+    await page.route('https://terminal-session.test/**',route=>route.fulfill({contentType:'text/html',body:html}));await page.goto('https://terminal-session.test/');await page.waitForFunction(()=>!document.getElementById('new-top').disabled);
+    for(const id of [tcp.id,waiting.id,workspaceID])assert(await page.locator('[data-session-id="'+id+'"]').count(),'session group visible '+id);
+    checks.push('all populated workspace/communication/waiting/saved groups rendered');
+    await page.locator('#new-top').click();await page.locator('#kind').selectOption('telnet');assert.equal(await page.locator('input[name=networkPort]').inputValue(),'23');assert(await page.locator('#relay-enabled').isEnabled());assert(!(await page.locator('input[name=telnetLocalEcho]').isChecked()));assert(await page.locator('#x11-fields').isHidden());
+    await page.locator('input[name=name]').fill('Telnet browser source');await page.locator('input[name=networkPort]').fill(String(server.port));await page.locator('#create-submit').click();await page.waitForFunction(()=>!document.getElementById('create-dialog').open);
+    const source=f.m.list(f.ui).sessions.find(r=>r.name==='Telnet browser source');assert(source);await until(()=>f.output(source.id).includes('READY'));
+    await page.locator('#copy-session').click();await page.locator('#copy-name').fill('Telnet browser copy');await page.locator('#copy-connect').click();await page.waitForFunction(()=>!document.getElementById('copy-dialog').open);
+    const copied=f.m.list(f.ui).sessions.find(r=>r.name==='Telnet browser copy');assert(copied);assert.notEqual(copied.id,source.id);assert.equal(copied.copiedFrom,source.id);await until(()=>f.output(copied.id).includes('READY'));
+    assert.equal(await page.locator('#connection-name').textContent(),'Telnet browser copy');await page.locator('#close-session').click();await page.locator('#confirm-accept').click();await until(()=>!f.m.get(f.m.space(f.ui),copied.id,f.ui).worker);assert.equal(f.m.list(f.ui).sessions.find(r=>r.id===source.id).status,'running');
+    await page.locator('[data-session-id="'+source.id+'"]').click();await page.locator('.terminal-pane:not([hidden]) textarea.xterm-helper-textarea').focus();await page.keyboard.type('from_browser');await page.keyboard.press('Enter');await until(()=>f.output(source.id).includes('from_browser'));assert(!f.output(copied.id).includes('from_browser'));
+    const pasted='p'.repeat(4095)+'\u{1f600}\r\n';
+    const sourcePeer=server.records.find(r=>Buffer.from(r.application).includes(Buffer.from('from_browser')));assert(sourcePeer);const beforePaste=sourcePeer.application.length;
+    await page.locator('.terminal-pane:not([hidden]) textarea.xterm-helper-textarea').evaluate((element,text)=>{const data=new DataTransfer();data.setData('text/plain',text);element.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));},pasted);
+    await until(()=>sourcePeer.application.length>=beforePaste+Buffer.byteLength(pasted),'UTF-8 paste across input chunk boundary');assert.deepEqual(Buffer.from(sourcePeer.application.slice(beforePaste)),Buffer.from(pasted));
+    checks.push('real Telnet create/copy-and-connect, independent close and browser keyboard input');
+    await page.locator('#copy-session').click();await page.locator('#copy-name').fill('Saved browser copy');await page.locator('#copy-settings').click();await page.waitForFunction(()=>!document.getElementById('copy-dialog').open);const saved=f.m.list(f.ui).sessions.find(r=>r.name==='Saved browser copy');assert.equal(saved.status,'saved');assert(await page.locator('[data-session-id="'+saved.id+'"]').count());assert.equal(f.output(saved.id),'');
+    checks.push('copy settings has independent saved profile, empty history and visible row');
+    for(const width of [1440,390])for(const theme of ['dark','light']){
+      await page.setViewportSize({width,height:1000});await page.evaluate(theme=>window.postMessage({type:'aide.workbench.theme',protocol:1,theme,colors:theme==='light'?{bg:'#fff',panel:'#f5f6f8',text:'#222',muted:'#555',line:'#ccc'}:{bg:'#101620',panel:'#151d29',text:'#e1e7ef',muted:'#90a0b5',line:'#293547'}},'*'),theme);
+      await page.locator('#copy-session').click();const bounds=await page.locator('#copy-dialog').boundingBox();assert(bounds.x>=0&&bounds.x+bounds.width<=width+1,'copy dialog fits '+width);await page.screenshot({path:path.join(out,'copy-'+width+'-'+theme+'.png')});await page.locator('#copy-cancel').click();
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'page has no horizontal overflow '+width);
+      checks.push({width,theme,dialogBounds:true,noHorizontalOverflow:true});
+    }
+    await page.setViewportSize({width:1440,height:1000});await page.locator('[data-session-id="'+workspaceID+'"]').click();await page.locator('#copy-session').click();await page.locator('#copy-independent-ssh').click();assert.equal(await page.locator('#kind').inputValue(),'ssh');assert.equal(await page.locator('input[name=host]').inputValue(),'workspace.example.invalid');assert.equal(await page.locator('#auth').inputValue(),'password');assert(await page.locator('#x11-fields').isVisible());await page.locator('#x11-enabled').check();assert(await page.locator('#x11-settings').isVisible());assert((await page.locator('#x11-settings').textContent()).includes('XAUTHORITY'));assert((await page.locator('#x11-settings').textContent()).includes('工作区复用终端不支持'));await page.screenshot({path:path.join(out,'independent-ssh-x11.png')});
+    await page.setViewportSize({width:390,height:844});const xbounds=await page.locator('#create-dialog').boundingBox();assert(xbounds.x>=0&&xbounds.x+xbounds.width<=391&&xbounds.y>=0&&xbounds.y+xbounds.height<=845);await page.locator('#create-submit').scrollIntoViewIfNeeded();assert(await page.locator('#create-submit').isVisible());assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:path.join(out,'independent-ssh-x11-mobile.png')});await page.locator('#cancel-create').click();
+    checks.push('workspace-to-independent-SSH prefills public coordinates, requires fresh password and exposes X11 prerequisites');
+    assert.equal(errors.length,0,errors.join('\n'));
+    fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({status:'pass',checks,errors,scope:'Actual generated offline workbench HTML, real Sessions backend and isolated TCP Telnet; bridge context and saved workspace profile are fixtures. Not installed-Aide host or native X Server GUI acceptance.'},null,2)+'\n');console.log('PASS: session copy/Telnet/X11 UI, real backend connection isolation, 1440/390px light/dark');
+  }catch(error){if(page)await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});fs.writeFileSync(path.join(out,'failure.txt'),error.stack||String(error));throw error;}
+  finally{await browser.close();await f.m.stop();for(const fn of cleanup.reverse())await fn();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

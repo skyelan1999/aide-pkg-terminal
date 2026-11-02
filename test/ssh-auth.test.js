@@ -32,3 +32,22 @@ test('SSH workspace borrows authenticated master, quotes remote cwd, retains log
  await m.close(context,{id:rec.id});assert.equal((await m.reconnect(context,{id:rec.id})).session.id,rec.id);await until(()=>d.state.commands.length===2,'workspace shell reconnect');assert.equal(d.state.auth,1,'reconnect must reuse authenticated master');await m.close(context,{id:rec.id});
  await assert.rejects(m.create(context,{cwd:'../escape'}),/目录/);master.kill();await until(()=>!fs.existsSync(sock),'master exit');await assert.rejects(m.reconnect(context,{id:rec.id}),/工作区 SSH 连接不可用/);const failed=(await m.create(context,{})).session;await until(()=>m.list(context).sessions.find(r=>r.id===failed.id).status!=='running','closed without fallback');assert.equal(d.state.auth,1,'missing master must not authenticate again');
 });
+
+test('workspace copies reuse the admitted short socket with long private state and independent channels',{timeout:20000},async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'twc-')),state=path.join(root,'state-'+ 'long'.repeat(30));fs.mkdirSync(state);
+ const key=pair(),d=await device(t,key),m=new Sessions();let master;
+ t.after(async()=>{await m.stop();master?.kill();fs.rmSync(root,{recursive:true,force:true});});
+ const keyFile=path.join(root,'key'),known=path.join(root,'known'),socket=path.join(root,'master.sock');fs.writeFileSync(keyFile,key,{mode:0o600});fs.writeFileSync(known,'[127.0.0.1]:'+d.port+' '+utils.parseKey(d.host).getPublicSSH().toString('base64').replace(/^/,'ssh-rsa ')+'\n',{mode:0o600});
+ master=spawn('ssh',['-F','/dev/null','-M','-N','-S',socket,'-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+known,'-o','IdentitiesOnly=yes','-i',keyFile,'-p',String(d.port),'-l','device','127.0.0.1'],{stdio:'ignore'});await until(()=>fs.existsSync(socket),'verified master');
+ const pinnedSocket=path.join(root,'pinned.sock');fs.linkSync(socket,pinnedSocket);
+ const context={storageRoot:root,stateRoot:state,workbench:true,sessionCopyVersion:1,remote:{host:'127.0.0.1',port:d.port,username:'device',path:'/remote/project',socket:pinnedSocket,masterSocket:socket,pinned:true}};
+ const source=(await m.create(context,{name:'workspace source'})).session;await output(m,context,source.id,/WORKSPACE_READY/);
+ const copy=(await m.create(context,{copyFrom:source.id,connect:true,name:'workspace copy'})).session;
+ await until(()=>m.list(context).sessions.find(r=>r.id===copy.id).status!=='running'||Buffer.from(m.poll(context,{id:copy.id}).output.data,'base64').toString().includes('WORKSPACE_READY'),'copy shell result');
+ assert.match(Buffer.from(m.poll(context,{id:copy.id}).output.data,'base64').toString(),/WORKSPACE_READY/);
+ assert.notEqual(copy.id,source.id);assert.equal(d.state.auth,1);assert.equal(d.state.commands.length,2);
+ const otherSocket=path.join(root,'other.sock'),otherMaster=require('node:net').createServer();await new Promise(r=>otherMaster.listen(otherSocket,r));t.after(()=>otherMaster.close());
+ await assert.rejects(m.create({...context,remote:{...context.remote,masterSocket:otherSocket}},{copyFrom:source.id,connect:true}),/工作区 SSH 连接不可用/);assert.equal(d.state.auth,1);
+ const link=path.join(root,'socket-link');fs.symlinkSync(socket,link);await assert.rejects(m.create({...context,remote:{...context.remote,socket:link}},{copyFrom:source.id,connect:true}),/工作区 SSH 连接不可用/);
+ await m.close(context,{id:source.id});m.send(context,{id:copy.id,data:'COPY_AFTER_SOURCE_CLOSE\r'});await output(m,context,copy.id,/REMOTE:COPY_AFTER_SOURCE_CLOSE/);assert(!Buffer.from(m.poll(context,{id:source.id}).output.data,'base64').toString().includes('COPY_AFTER_SOURCE_CLOSE'));
+});

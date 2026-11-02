@@ -1,0 +1,12 @@
+# Disposable Linux QA only. Never replaces an Aide runtime or host X server.
+ARG AIDE_X11_BASE=node:24-bookworm-slim
+FROM ${AIDE_X11_BASE}
+USER root
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+    && chmod 755 /usr/sbin/policy-rc.d \
+    && apt-get update \
+    && apt-get install --yes --no-install-recommends \
+       python3 python3-cryptography python3-serial openssh-client openssh-server \
+       xauth xvfb x11-apps x11-utils xfonts-base \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /work

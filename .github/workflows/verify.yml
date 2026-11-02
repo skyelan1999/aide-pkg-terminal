@@ -33,6 +33,56 @@ jobs:
           npm run build
           git diff --exit-code -- workbench.html
           npm test
-          python3 scripts/package.py
-          cmp dist/aide-pkg-terminal-v1.5.3-candidate.zip packages/v1.5.3/aide-pkg-terminal-v1.5.3.zip
-          python3 scripts/verify_package.py packages/v1.5.3/aide-pkg-terminal-v1.5.3.zip
+          python3 scripts/package.py --release
+          version=$(node -p "require('./manifest.json').version")
+          python3 scripts/verify_package.py "dist/aide-pkg-terminal-v${version}-candidate.zip"
+          (cd packages/v1.5.3 && sha256sum --check SHA256SUMS)
+          (cd packages/v${version} && sha256sum --check SHA256SUMS)
+
+  workbench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: node test/browser-session-features.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: terminal-session-feature-ui
+          path: .agent-state/session-feature-browser
+
+  x11-render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: docker build --file test/Dockerfile.x11 --tag terminal-x11-qa .
+      - name: Render real X clients from the versioned runtime ZIP
+        run: |
+          version=$(node -p "require('./manifest.json').version")
+          docker run --name terminal-x11-live --user 0 --network none --cpus 2 --memory 1g \
+            --mount "type=bind,src=$PWD,dst=/work,readonly" --workdir /work \
+            -e AIDE_X11_QA_CONTAINER=1 -e AIDE_EVIDENCE_DIR=/tmp/terminal-real-x11-evidence \
+            --entrypoint python3 terminal-x11-qa scripts/test-x11-live.py \
+            python3 scripts/verify_package.py "packages/v${version}/aide-pkg-terminal-v${version}.zip" --live-x11
+      - name: Collect isolated X11 evidence and remove the test container
+        if: always()
+        run: |
+          mkdir -p .agent-state/x11-real-render
+          docker cp terminal-x11-live:/tmp/terminal-real-x11-evidence/. .agent-state/x11-real-render/ || true
+          docker rm --force terminal-x11-live || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: terminal-real-x11-render
+          path: .agent-state/x11-real-render

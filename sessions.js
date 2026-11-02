@@ -7,6 +7,9 @@ const readline = require('node:readline');
 const HISTORY = 512 * 1024, PAGE = 64 * 1024, MAX_SESSIONS = 32, MAX_ACTIVE = 16;
 const LOG_BYTES = 2 * 1024 * 1024, LOG_FILES = 4;
 const relay=require('./relay/client');
+const net=require('node:net');
+const {Telnet}=require('./telnet');
+const {prepareX11}=require('./x11');
 const {Communications,data:communicationData}=require('./communications');
 const COMM_KINDS=['tcp','tcp-server','udp','serial'];
 const ID = /^[a-f0-9]{24}$/;
@@ -62,7 +65,7 @@ class Sessions {
     for (const file of fs.readdirSync(dir).filter(x => /^[a-f0-9]{24}\.json$/.test(x))) {
       const rec = JSON.parse(readPrivate(path.join(dir, file)));
       if (!ID.test(rec.id) || file !== rec.id + '.json') throw Error('会话记录损坏');
-      if (!['local','workspace','ssh',...COMM_KINDS].includes(rec.kind)) continue;
+      if (!['local','workspace','ssh','telnet',...COMM_KINDS].includes(rec.kind)) continue;
       if (space.records.size >= MAX_SESSIONS) break;
       if (['starting','running'].includes(rec.status)) { rec.status = 'interrupted'; rec.endedAt = new Date().toISOString(); }
       rec.worker = null; rec.history = Buffer.alloc(0); rec.base = rec.offset = 0;
@@ -78,8 +81,8 @@ class Sessions {
     return space;
   }
   public(rec) {
-    const {connectionRole,multicast,visibleToAide=true,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError} = rec;
-    return {connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError};
+    const {copiedFrom,x11Enabled=false,x11Display,x11AuthorityFile,terminalType,telnetLocalEcho=false,connectionRole,multicast,visibleToAide=true,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError} = rec;
+    return {copiedFrom,x11Enabled,x11Display,x11AuthorityFile,terminalType,telnetLocalEcho,copyable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',copyConnectable:!['serial','tcp-server'].includes(rec.kind),connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError};
   }
   persist(space, rec) {
     const temporary = path.join(space.dir, rec.id + '.json.tmp');
@@ -117,17 +120,20 @@ class Sessions {
   }
   list(workspace) {
     const space = this.space(workspace);
-    return {workspace:{mode:space.remote?'ssh':'local',host:space.remote?.host,path:space.remote?.path},sessions:[...space.records.values()].filter(rec=>workspace?.workbench===true||rec.visibleToAide!==false).map(rec => this.public(rec)), storage:workspace?.stateRoot?'Aide 私有会话存储（按工作区隔离）':space.remote?'Aide 数据目录 / terminal-workspaces/<工作区标识>/.aide/terminal-workbench':'.aide/terminal-workbench', limits:{sessions:MAX_SESSIONS,active:MAX_ACTIVE,logBytes:LOG_BYTES,logFiles:LOG_FILES}};
+    return {capabilities:{sessionCopy:workspace?.sessionCopyVersion===1},workspace:{mode:space.remote?'ssh':'local',host:space.remote?.host,path:space.remote?.path},sessions:[...space.records.values()].filter(rec=>workspace?.workbench===true||rec.visibleToAide!==false).map(rec => this.public(rec)), storage:workspace?.stateRoot?'Aide 私有会话存储（按工作区隔离）':space.remote?'Aide 数据目录 / terminal-workspaces/<工作区标识>/.aide/terminal-workbench':'.aide/terminal-workbench', limits:{sessions:MAX_SESSIONS,active:MAX_ACTIVE,logBytes:LOG_BYTES,logFiles:LOG_FILES}};
   }
   async create(workspace, args, existing) {
     if (this.stopping) throw Error('后台正在停止');
     const space = this.space(workspace);
+    if(!existing&&args.copyFrom!==undefined)return this.duplicate(workspace,args);
     if (!existing && space.records.size >= MAX_SESSIONS) throw Error('最多保留32个会话，请先删除已结束的记录');
     const active = [...this.spaces.values()].flatMap(s => [...s.records.values()]).filter(r => r.worker).length;
     if (active >= MAX_ACTIVE) throw Error('最多同时运行16个会话');
     let kind = args.kind || 'local';
     if (kind === 'local' && space.remote) kind = 'workspace';
-    if (!['local','ssh','workspace',...COMM_KINDS].includes(kind)) throw Error('未知会话类型');
+    if (!['local','ssh','workspace','telnet',...COMM_KINDS].includes(kind)) throw Error('未知会话类型');
+    if(args.x11Enabled!==undefined&&typeof args.x11Enabled!=='boolean')throw Error('X11 enabled must be boolean');
+    if(args.x11Enabled&&kind!=='ssh')throw Error('X11 requires an independent SSH device session');
     const cwd = text(args.cwd, '.', 512);
     if (path.isAbsolute(cwd) || cwd.split(/[\\/]/).includes('..')) throw Error('目录路径必须位于当前工作区内');
     const working = space.remote ? space.root : inside(space.root, cwd);
@@ -136,6 +142,7 @@ class Sessions {
     const rec = existing || {visibleToAide:args.visibleToAide!==false,id:crypto.randomBytes(12).toString('hex'), kind, name:text(args.name, kind === 'ssh' ? 'SSH 设备' : '本地终端', 80), cwd, cols, rows,
       createdAt:new Date().toISOString(),status:'starting',logging:args.logging !== false,offset:0,base:0,history:Buffer.alloc(0),worker:null};
     if(args.relay?.enabled&&!existing)return this.createRelay(space,rec,args,workspace);
+    if(kind==='telnet')return this.startTelnet(space,rec,args);
     if(COMM_KINDS.includes(kind))return this.startCommunication(space,rec,args);
     if(process.platform==='win32')throw Error('交互式 PTY 需要 Linux/macOS；Windows 请使用 Aide Linux 容器');
     let argv = ['/bin/bash', '--noprofile', '--norc', '-i'];
@@ -149,6 +156,8 @@ class Sessions {
       argv=['ssh','-F','/dev/null','-tt','-S',remote.socket,'-o','ControlMaster=no','-o','BatchMode=yes','-o','ProxyCommand=/bin/false','-o','EscapeChar=none','-p',String(remote.port||22),'-l',remote.username,remote.host,"cd -- "+quote(directory)+" && exec /bin/bash --noprofile --norc -i"];
     }
     let identityMaterial;
+    const x11=prepareX11({...args,kind},space.root);
+    if(kind==='ssh'){rec.x11Enabled=!!args.x11Enabled;rec.x11Display=args.x11Display;rec.x11AuthorityFile=args.x11AuthorityFile;}
     if (kind === 'ssh') {
       rec.host = text(args.host, '', 253);
       if (!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(rec.host) && !/^[a-fA-F0-9:]+$/.test(rec.host)) throw Error('SSH 主机名无效');
@@ -176,12 +185,14 @@ class Sessions {
           argv.push('-i', inside(space.root, rec.identityFile, false));
         }
       } else if (rec.auth === 'key') throw Error('请选择私钥文件');
+      argv.push(...x11.argv);
       if(rec.relayEnabled){const config=this.relayConfig(space,rec);rec.relayTunnel=await relay.tunnel(config,online=>{rec.relayOnline=online?'online':'offline';});const alias=rec.port===22?rec.host:'['+rec.host+']:'+rec.port;argv[argv.indexOf('-p')+1]=String(rec.relayTunnel.port);argv.push('-o','HostKeyAlias='+alias,'-o','CheckHostIP=no','127.0.0.1');}else argv.push(rec.host);
     }
+    if(this.stopping){rec.relayTunnel?.close();throw Error('Session stopped while connecting');}
     space.records.set(rec.id, rec);
     try{this.persist(space,rec);}catch(error){rec.relayTunnel?.close();rec.relayTunnel=null;if(!existing)space.records.delete(rec.id);throw error;}
     const worker = spawn('python3', ['-I', path.join(__dirname, 'pty-worker.py')], {
-      cwd:working, env:{PATH:process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME:process.env.HOME || '/home/aide', LANG:'C.UTF-8', PYTHONUNBUFFERED:'1'}, stdio:['pipe','pipe','pipe']});
+      cwd:working, env:{PATH:process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME:process.env.HOME || '/home/aide', LANG:'C.UTF-8', PYTHONUNBUFFERED:'1',...x11.env}, stdio:['pipe','pipe','pipe']});
     rec.worker = worker;
     worker.stdin.on('error', () => {});
     worker.stderr.on('data', () => {}); // no credentials or arbitrary helper stderr in daemon events
@@ -213,12 +224,89 @@ class Sessions {
     await ready;
     return {session:this.public(rec)};
   }
+  async duplicate(workspace,args){
+    const space=this.space(workspace),source=this.get(space,args.copyFrom,workspace);
+    if(space.records.size>=MAX_SESSIONS)throw Error('Session limit reached');
+    if(typeof args.connect!=='undefined'&&typeof args.connect!=='boolean')throw Error('connect must be boolean');
+    if(!this.public(source).copyable)throw Error('An accepted TCP peer cannot be duplicated as an outbound connection');
+    if(args.connect&&!this.public(source).copyConnectable)throw Error('Copy settings only for exclusive serial/listener resources');
+    const rec={};
+    for(const key of ['kind','cwd','cols','rows','logging','visibleToAide','host','port','username','identityFile','identitySource','auth','devicePath','baudRate','dataBits','stopBits','parity','flowControl','bindPort','multicast','connectionRole','terminalType','telnetLocalEcho','x11Enabled','x11Display','x11AuthorityFile'])if(source[key]!==undefined)rec[key]=source[key];
+    Object.assign(rec,{id:crypto.randomBytes(12).toString('hex'),copiedFrom:source.id,name:text(args.name,(source.name.slice(0,70)+' copy'),80),createdAt:new Date().toISOString(),status:'saved',history:Buffer.alloc(0),base:0,offset:0,worker:null});
+    if(rec.kind==='udp')rec.bindPort=0;
+    try{
+      if(source.relayEnabled){const config=this.relayConfig(space,source);writePrivate(path.join(space.dir,rec.id+'.relay.json'),JSON.stringify(config));Object.assign(rec,{relayEnabled:true,relayEndpoint:source.relayEndpoint,relayOnline:'unknown'});}
+      space.records.set(rec.id,rec);this.persist(space,rec);
+    }catch(error){space.records.delete(rec.id);fs.rmSync(path.join(space.dir,rec.id+'.relay.json'),{force:true});throw error;}
+    if(args.connect)return this.reconnect(workspace,{id:rec.id});
+    return {session:this.public(rec)};
+  }
+  async startTelnet(space,rec,args){
+    if(space.disabledTools?.includes('terminal_tcp_connect'))throw Error('TCP connections disabled by administrator');
+    rec.host=text(args.host,'127.0.0.1',253);rec.port=integer(args.port,23,1,65535);
+    if(!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(rec.host)&&!/^[a-fA-F0-9:]+$/.test(rec.host))throw Error('Invalid Telnet host');
+    rec.terminalType=text(args.terminalType,'xterm-256color',64);
+    if(!/^[A-Za-z0-9_.+-]+$/.test(rec.terminalType))throw Error('Invalid Telnet terminal type');
+    if(args.telnetLocalEcho!==undefined&&typeof args.telnetLocalEcho!=='boolean')throw Error('Telnet local echo must be boolean');
+    rec.telnetLocalEcho=args.telnetLocalEcho===true;
+    const attempt={cancelled:false,controller:new AbortController()},finish={};
+    attempt.done=new Promise(resolve=>{finish.resolve=resolve;});rec.connectAttempt=attempt;
+    rec.status='starting';rec.worker={};space.records.set(rec.id,rec);
+    let socket;
+    rec.transport={close:async()=>{attempt.cancelled=true;attempt.controller.abort();socket?.destroy();await attempt.done;}};
+    try{
+      this.persist(space,rec);
+      if(rec.relayEnabled){socket=await relay.open(this.relayConfig(space,rec),'open',{signal:attempt.controller.signal});rec.relayOnline='online';}
+      else socket=await new Promise((resolve,reject)=>{
+        const value=net.createConnection({host:rec.host,port:rec.port});socket=value;
+        const abort=()=>value.destroy(Error('Telnet connection cancelled'));
+        attempt.controller.signal.addEventListener('abort',abort,{once:true});
+        const cleanup=()=>attempt.controller.signal.removeEventListener('abort',abort);
+        value.setTimeout(15000,()=>value.destroy(Error('Telnet connection timed out')));
+        value.once('connect',()=>{cleanup();value.setTimeout(0);resolve(value);});value.once('error',error=>{cleanup();reject(error);});
+      });
+      if(attempt.cancelled||this.stopping||!space.records.has(rec.id)){socket.destroy();throw Error('Session stopped while connecting');}
+      socket.setNoDelay(true);rec.telnetSocket=socket;rec.telnetInputCR=false;rec.status='running';delete rec.endedAt;delete rec.exitCode;
+      rec.telnet=new Telnet(data=>{if(socket.writableLength>65536){socket.destroy(Error('Telnet negotiation queue full'));return;}socket.write(data);},data=>{if(rec.telnetSocket===socket)this.output(space,rec,data);},{cols:rec.cols,rows:rec.rows,terminal:rec.terminalType});
+      socket.on('data',data=>{if(rec.telnetSocket!==socket)return;try{rec.telnet.receive(data);}catch(error){socket.destroy(error);}});
+      socket.on('error',()=>{if(rec.telnetSocket===socket)rec.status='error';});
+      socket.on('close',()=>{if(rec.telnetSocket!==socket)return;rec.telnet.finish();rec.telnet=null;rec.telnetSocket=null;rec.worker=null;if(rec.status!=='error')rec.status='exited';rec.endedAt=new Date().toISOString();if(space.records.has(rec.id))try{this.persist(space,rec);}catch(_){rec.logError='Session state save failed';}});
+      rec.transport={close:()=>new Promise(resolve=>{if(socket.closed)return resolve();socket.once('close',resolve);socket.destroy();})};
+      this.persist(space,rec);rec.telnet.start();socket.resume();return {session:this.public(rec)};
+    }catch(error){socket?.destroy();rec.status=attempt.cancelled?'exited':'error';rec.endedAt=new Date().toISOString();rec.worker=null;rec.transport=null;if(space.records.has(rec.id))this.persist(space,rec);throw error;}
+    finally{if(rec.connectAttempt===attempt)delete rec.connectAttempt;finish.resolve();}
+  }
+  async sendTelnet(space,rec,args){
+    if(space.disabledTools?.includes('terminal_tcp_send'))throw Error('TCP sending disabled by administrator');
+    const original=communicationData(args.data,args.format||'utf8');
+    if(rec.telnetSocket.writableLength>65536)throw Error('Telnet send queue full; verify before retrying');
+    let data=original;
+    if(args.format==='hex')rec.telnetInputCR=false;
+    else{
+      let text=original.toString('utf8');const source=text;
+      if(rec.telnetInputCR&&text.startsWith('\n'))text=text.slice(1);
+      if(source.length)rec.telnetInputCR=source.endsWith('\r');
+      data=Buffer.from(text.replace(/\r(?!\n)/g,'\r\n'));
+    }
+    const wire=rec.telnet.encode(data);
+    if(rec.telnetLocalEcho&&!rec.telnet.remoteEcho)this.output(space,rec,data);
+    await new Promise((resolve,reject)=>rec.telnetSocket.write(wire,error=>error?reject(error):resolve()));
+    return {bytesWritten:original.length};
+  }
   pinWorkspaceSocket(space,remote) {
     // Manual reconnect may receive the host's live control path rather than the
     // inode-pinned path supplied on initial creation. Freeze that exact master
     // before spawning SSH; never fall back to another connection or credential.
     try {
       const source=fs.lstatSync(remote.socket,{bigint:true});if(!source.isSocket())throw Error();
+      // The trusted host already pinned this exact inode in its short private directory.
+      // Do not turn it into an overlong ControlPath under the workspace state root.
+      if(remote.pinned===true){
+        if(typeof remote.masterSocket!=='string')throw Error();
+        const master=fs.lstatSync(remote.masterSocket,{bigint:true});
+        if(!master.isSocket()||master.dev!==source.dev||master.ino!==source.ino)throw Error();
+        return {...remote};
+      }
       const socket=path.join(space.dir,'.ssh-master-'+crypto.createHash('sha256').update(String(source.dev)+':'+String(source.ino)).digest('hex').slice(0,32));
       try{fs.linkSync(remote.socket,socket);}catch(error){if(error.code!=='EEXIST')throw error;}
       const pinned=fs.lstatSync(socket,{bigint:true});if(!pinned.isSocket()||pinned.dev!==source.dev||pinned.ino!==source.ino)throw Error();
@@ -250,13 +338,15 @@ class Sessions {
   relayConfig(space,rec){return JSON.parse(readPrivate(path.join(space.dir,rec.id+'.relay.json')));}
   createRelay(space,rec,args,workspace){
     if(workspace?.workbench!==true||!workspace.stateRoot)throw Error('请通过新版工作台配置中继');
-    if(!['ssh','tcp','udp','serial'].includes(rec.kind))throw Error('中继支持 SSH、TCP、UDP 和串口会话');
+    if(!['ssh','telnet','tcp','udp','serial'].includes(rec.kind))throw Error('中继支持 SSH、TCP、UDP 和串口会话');
     const target={kind:rec.kind};
+    if(rec.kind==='telnet'){target.terminalType=args.terminalType||'xterm-256color';target.telnetLocalEcho=args.telnetLocalEcho===true;}
     if(rec.kind==='serial')Object.assign(target,{devicePath:text(args.devicePath,'',512),baudRate:integer(args.baudRate,115200,1,4000000),dataBits:integer(args.dataBits,8,5,8),stopBits:Number(args.stopBits??1),parity:args.parity||'none',flowControl:!!args.flowControl});
-    else Object.assign(target,{host:text(args.host,'127.0.0.1',253),port:integer(args.port,rec.kind==='ssh'?22:undefined,1,65535)});
+    else Object.assign(target,{host:text(args.host,'127.0.0.1',253),port:integer(args.port,rec.kind==='ssh'?22:rec.kind==='telnet'?23:undefined,1,65535)});
     if(target.host&&!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(target.host))throw Error('目标主机名无效');
     if(rec.kind==='serial'&&(![1,1.5,2].includes(target.stopBits)||!['none','even','odd','mark','space'].includes(target.parity)))throw Error('串口参数无效');
     if(rec.kind==='ssh'){Object.assign(target,{username:text(args.username,'',64),auth:args.auth||'default',identityFile:args.identityFile,identitySource:args.identitySource});if(!/^[a-zA-Z0-9_][a-zA-Z0-9_.@-]*$/.test(target.username)||!['default','password','key'].includes(target.auth))throw Error('SSH 用户名或认证方式无效');if(target.auth==='key'&&!target.identityFile)throw Error('请选择私钥文件');}
+    if(rec.kind==='ssh'){target.x11Enabled=!!args.x11Enabled;target.x11Display=args.x11Display;target.x11AuthorityFile=args.x11AuthorityFile;}
     const host=text(args.relay.host,'',253),port=integer(args.relay.port,17780,1,65535),key=String(args.relay.key||'').trim()||crypto.randomBytes(32).toString('base64');relay.keyBytes(key);
     if(!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(host))throw Error('中继主机名无效');
     const config={id:crypto.createHmac('sha256',relay.keyBytes(key)).update('aide-relay-v1-id').digest('hex').slice(0,24),kind:rec.kind,host,port,key,listenHost:'0.0.0.0',listenPort:port,target};
@@ -285,6 +375,7 @@ class Sessions {
     if([...this.spaces.values()].flatMap(s=>[...s.records.values()]).filter(r=>r.worker).length>=MAX_ACTIVE)throw Error('最多同时运行16个会话');
     rec.relayConnecting=true;try{
     const config=this.relayConfig(space,rec);
+    if(rec.kind==='telnet')return await this.startTelnet(space,rec,config.target);
     if(rec.kind==='ssh'){await relay.open(config,'probe');this.get(space,args.id,workspace);rec.relayOnline='online';return this.create(workspace,{...config.target,cwd:rec.cwd},rec);}
     const socket=await relay.open(config);try{this.get(space,args.id,workspace);if(this.stopping)throw Error('后台正在停止');}catch(error){socket.destroy();throw error;}rec.relaySocket=socket;rec.relayOnline='online';rec.status='running';delete rec.endedAt;rec.worker={};
     let pending=Buffer.alloc(0);
@@ -375,6 +466,7 @@ class Sessions {
   send(workspace, args) {
     const rec = this.get(this.space(workspace), args.id,workspace);
     if (!rec.worker || rec.status !== 'running') throw Error('会话已结束，创建新会话后重试');
+    if(rec.kind==='telnet')return this.sendTelnet(this.space(workspace),rec,args);
     if(rec.relaySocket)return this.sendRelay(this.space(workspace),rec,args);
     if(rec.transport)return this.sendCommunication(this.space(workspace),rec,args);
     if (typeof args.data !== 'string' || Buffer.byteLength(args.data) > 16384) throw Error('单次输入不能超过16KiB');
@@ -385,6 +477,7 @@ class Sessions {
   resize(workspace, args) {
     const space = this.space(workspace), rec = this.get(space, args.id,workspace);
     rec.cols = integer(args.cols, 100, 20, 400); rec.rows = integer(args.rows, 30, 5, 200);
+    if(rec.kind==='telnet'&&rec.telnet)rec.telnet.resize(rec.cols,rec.rows);
     if (rec.worker && !rec.transport) rec.worker.stdin.write(JSON.stringify({type:'resize',cols:rec.cols,rows:rec.rows})+'\n');
     this.persist(space, rec);
     return {session:this.public(rec)};
@@ -398,6 +491,7 @@ class Sessions {
   }
   async close(workspace, args) {
     const space = this.space(workspace), rec = this.get(space,args.id,workspace);
+    if(rec.kind==='telnet'&&rec.connectAttempt)return this.closeRecord(space,rec);
     if(rec.reconnecting||rec.relayConnecting)throw Error('会话正在连接，请稍后再结束');
     return this.closeRecord(space,rec);
   }

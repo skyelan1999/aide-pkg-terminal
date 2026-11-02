@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.0（发行状态以 GitHub Release 为准）
+
+- 独立会话复制设置/复制并连接；共享既有固定目标中继，PTY、连接和日志独立。
+- Telnet 直连/中继的流式 IAC、NVT、ECHO/SGA、TTYPE、NAWS、BINARY 处理，断开取消及动态发送禁用检查。
+- 独立 SSH 直连/中继可显式请求非信任 X11，验证 DISPLAY/xauth/Xauthority；工作区 SSH 可预填公开配置后新建独立连接并重新认证。
+- 修复遗漏部分会话类型的侧栏分组（Aide #728），复用宿主规范短 SSH socket 并核对原 master inode（#730）。
+- 增加真实 Linux Xvfb + xauth + OpenSSH + xmessage 的直连与 TLS relay 窗口显示验证；副本在源连接关闭后仍显示窗口，保存截图和窗口树。合成协议测试继续保留。
+- 要求 Aide v0.1.18.0-RC2+；市场最低版本0.1.18.0 RC2，无sourceCompatibility降级。提供正式ZIP/SHA与隔离CI，历史1.5.3不变。
+- macOS XQuartz、原生Windows、硬件与用户设备仍为NOT_RUN；宿主正式镜像另由主程序门禁验收。详见 docs/session-features.md。
+
 ## 1.5.1（预发布）
 
 - 按用户要求移除 RDP/VNC，恢复1.4.2终端工作台。
