@@ -48,10 +48,10 @@
   function bytes(base64) { return Uint8Array.from(atob(base64), c => c.charCodeAt(0)); }
   function terminal(id) {
     if (panes.has(id)) return panes.get(id);
-    const element = document.createElement('div');element.className='terminal-pane';element.hidden=true;$('terminal').append(element);
+    const element = document.createElement('div');element.className='terminal-pane';element.hidden=true;const gutter=document.createElement('div');gutter.className='terminal-gutter';gutter.setAttribute('aria-hidden','true');const view=document.createElement('div');view.className='terminal-view';element.append(gutter,view);$('terminal').append(element);
     const term = new Terminal({cursorBlink:true,fontSize:13,fontFamily:'"Cascadia Code","SFMono-Regular",Consolas,monospace',scrollback:10000,
       allowProposedApi:false,screenReaderMode:true,theme:{background:'#0b1018',foreground:'#d5e3ef',cursor:'#6fe0ba',selectionBackground:'#2c5062',black:'#152130',brightBlack:'#61768f',red:'#f18b9a',green:'#85d7af',yellow:'#e5cb8b',blue:'#7bb8f5',magenta:'#c6a1f0',cyan:'#79d7dc',white:'#dde5ef'}});
-    const fit = new FitAddon.FitAddon(), search = new SearchAddon.SearchAddon();term.loadAddon(fit);term.loadAddon(search);term.open(element);
+    const fit = new FitAddon.FitAddon(), search = new SearchAddon.SearchAddon();term.loadAddon(fit);term.loadAddon(search);term.open(view);
     // Escape sequence responses are sent only while this session is selected and running.
     term.onData(data => {
       if (paused || selected !== id || sessions.find(s=>s.id===id)?.status !== 'running'||communication(sessions.find(s=>s.id===id))) return;
@@ -64,7 +64,9 @@
     });
     // Do not let a terminal silently request browser clipboard access (OSC 52).
     term.parser.registerOscHandler(52,()=>true);
-    const state={term,fit,search,element,offset:0,cols:0,rows:0};panes.set(id,state);return state;
+    const state={term,fit,search,element,gutter,offset:0,cols:0,rows:0,timestamps:new Map(),pendingTimestamp:null};
+    term.onLineFeed(()=>{const active=term.buffer.active,row=active.baseY+active.cursorY;state.timestamps.set(row,state.pendingTimestamp||new Date());while(state.timestamps.size>12000)state.timestamps.delete(state.timestamps.keys().next().value);});
+    term.onScroll(viewportY=>requestAnimationFrame(()=>renderGutter(id,viewportY)));term.element?.querySelector('.xterm-viewport')?.addEventListener('scroll',()=>requestAnimationFrame(()=>renderGutter(id)),{passive:true});term.onWriteParsed(()=>requestAnimationFrame(()=>renderGutter(id)));panes.set(id,state);applyDisplayPrefs(id,state);return state;
   }
   async function flushInput(id) {
     const pending=pendingInput.get(id);if(!pending)return;
@@ -84,6 +86,10 @@
     } catch(error) { paused=true;for(const p of pendingInput.values())p.text='';message('输入结果待核实，不会自动重发。'+error.message); }
     finally {pending.sending=false;}
   }
+  const displayPrefs = new Map();
+  function prefsFor(id){const rec=sessions.find(s=>s.id===id);if(rec?.displaySettingsVersion===1){const prefs={lineNumbers:rec.displayLineNumbers===true,timestamps:rec.displayTimestamps===true};displayPrefs.set(id,prefs);return prefs;}if(!displayPrefs.has(id)){let prefs={lineNumbers:false,timestamps:false};try{const saved=JSON.parse(localStorage.getItem('aide.terminal.display.'+id)||'null');if(saved&&typeof saved==='object')prefs={lineNumbers:saved.lineNumbers===true,timestamps:saved.timestamps===true};}catch(_){}displayPrefs.set(id,prefs);}return displayPrefs.get(id);}
+  function applyDisplayPrefs(id,pane=panes.get(id)){if(!pane)return;const prefs=prefsFor(id),enabled=prefs.lineNumbers||prefs.timestamps,width=(prefs.lineNumbers?38:0)+(prefs.timestamps?72:0);pane.element.classList.toggle('has-gutter',enabled);pane.element.style.setProperty('--gutter-width',width+'px');pane.gutter.style.width=enabled?width+'px':'0px';pane.displaySignature=prefs.lineNumbers+':'+prefs.timestamps;if(id===selected){$('show-line-numbers').checked=prefs.lineNumbers;$('show-timestamps').checked=prefs.timestamps;}renderGutter(id);}
+  function renderGutter(id,viewportOverride){const pane=panes.get(id);if(!pane||pane.element.hidden)return;const prefs=prefsFor(id),enabled=prefs.lineNumbers||prefs.timestamps;if(!enabled){pane.gutter.replaceChildren();return;}const rows=pane.term.buffer.active,viewport=Number.isInteger(viewportOverride)?viewportOverride:rows.viewportY,labels=[];const rowNodes=pane.term.element?.querySelectorAll('.xterm-rows > div')||[];const paneRect=pane.element.getBoundingClientRect();for(let i=0;i<rowNodes.length;i++){const row=viewport+i,node=rowNodes[i],rect=node.getBoundingClientRect(),label=document.createElement('div');label.className='terminal-gutter-label';label.style.top=(rect.top-paneRect.top)+'px';if(prefs.lineNumbers){const number=document.createElement('span');number.textContent=String(row+1);label.append(number);}if(prefs.timestamps){const time=document.createElement('span');time.className='gutter-time';const stamp=pane.timestamps.get(row);time.textContent=stamp?stamp.toLocaleTimeString('zh-CN',{hour12:false}):'';label.append(time);}labels.push(label);}pane.gutter.replaceChildren(...labels);}
   function render() {
     $('session-count').textContent=sessions.length+' / 32';
     $('sessions').replaceChildren();$('tabs').replaceChildren();
@@ -119,7 +125,7 @@
     $('detail-created').textContent=created&&!Number.isNaN(created.getTime())?created.toLocaleString('zh-CN',{hour12:false}):'—';
     $('detail-logging').textContent=rec?(rec.logging?(running?'● 记录中':'已启用'):'已暂停'):'未开启';
     $('detail-logging').style.color=rec?.logging?'var(--positive)':'var(--muted)';
-    $('output-mode').textContent=rec?(running?'实时输出':'保留的会话输出'):'等待连接';
+    $('output-mode').textContent=rec?(running?'实时输出':'保留的会话输出'):'等待连接';$('display-settings').disabled=!rec;
     $('empty').hidden=!!rec;
     for(const id of ['new-top','new-empty','new-session'])$(id).disabled=!connected;
     for(const id of ['find','logs','logging'])$(id).disabled=!rec;
@@ -135,7 +141,7 @@
     $('status').textContent=rec?(labels[rec.status]||rec.status)+' · '+rec.name:'就绪 · 创建本地或 SSH 会话';
     $('log-status').textContent=rec?.logError || (!rec?'日志保存在当前工作区':rec.logging?(running?'● 正在记录输出':'● 日志已启用'):'输出日志已暂停');
     $('log-status').style.color=rec?.logError?'var(--danger)':'';
-    for(const [id,pane] of panes) { pane.element.hidden=id!==selected;pane.term.options.disableStdin=paused||sessions.find(s=>s.id===id)?.status!=='running'; }
+    let displayChanged=false;for(const [id,pane] of panes){const prefs=prefsFor(id),signature=prefs.lineNumbers+':'+prefs.timestamps;if(pane.displaySignature!==signature){applyDisplayPrefs(id,pane);if(id===selected)displayChanged=true;}pane.element.hidden=id!==selected;pane.term.options.disableStdin=paused||sessions.find(s=>s.id===id)?.status!=='running';}if(displayChanged)requestAnimationFrame(fitSelected);
   }
   function select(id) {
     selected=id;terminal(id);render();document.body.classList.remove('sidebar-open');$('sidebar-toggle').setAttribute('aria-expanded','false');
@@ -146,7 +152,7 @@
   function fitSelected() {
     const rec=current(),pane=panes.get(selected);if(!pane||!rec)return;
     $('tabs').querySelector('.active')?.scrollIntoView({block:'nearest',inline:'nearest'});
-    pane.fit.fit();$('dimensions').textContent=pane.term.cols+' × '+pane.term.rows;
+    pane.fit.fit();renderGutter(selected);$('dimensions').textContent=pane.term.cols+' × '+pane.term.rows;
     const cols=Math.max(20,Math.min(400,pane.term.cols)),rows=Math.max(5,Math.min(200,pane.term.rows));
     if(cols===pane.cols&&rows===pane.rows)return;
     pane.cols=cols;pane.rows=rows;clearTimeout(resizeTimer);
@@ -163,8 +169,8 @@
       const result=await enqueue('poll',id?{id,offset:pane?.offset||0}:{});
       const signature=JSON.stringify(sessions);sessions=result.sessions;sessionCopyCapable=result.capabilities?.sessionCopy===true;workspaceMode=result.workspace?.mode||'local';$('storage-path').textContent=result.storage||'.aide/terminal-workbench';$('kind').options[0].textContent=workspaceMode==='ssh'?'工作区 Shell · 已连接 SSH 主机':'工作区 Shell · Aide 本地环境';
       if(result.output&&pane) {
-        if(result.output.reset){pane.term.reset();pane.term.writeln('\x1b[33m[恢复保留的输出尾部；完整记录请查看磁盘日志]\x1b[0m');}
-        if(result.output.data)pane.term.write(bytes(result.output.data));pane.offset=result.output.offset;more=!!result.output.more;
+        if(result.output.reset){pane.term.reset();pane.timestamps.clear();pane.term.writeln('\x1b[33m[恢复保留的输出尾部；完整记录请查看磁盘日志]\x1b[0m');}
+        if(result.output.data){pane.pendingTimestamp=new Date();const active=pane.term.buffer.active;pane.timestamps.set(active.baseY+active.cursorY,pane.pendingTimestamp);pane.term.write(bytes(result.output.data),()=>renderGutter(id));}pane.offset=result.output.offset;more=!!result.output.more;
         if(result.output.data)interactiveUntil=Math.max(interactiveUntil,Date.now()+500);
       }
       if(!selected&&sessions.length){select(sessions[0].id);}else if(signature!==JSON.stringify(sessions))render();
@@ -239,7 +245,7 @@
   };
   $('delete-session').onclick=async()=>{
     const rec=current();if(!rec||!(await confirmAction('永久删除“'+rec.name+'”的会话记录和全部日志？')))return;
-    try{await enqueue('delete',{id:rec.id});panes.get(rec.id)?.term.dispose();panes.get(rec.id)?.element.remove();panes.delete(rec.id);sessions=sessions.filter(s=>s.id!==rec.id);selected=null;if(sessions.length)select(sessions[0].id);else render();}
+    try{await enqueue('delete',{id:rec.id});panes.get(rec.id)?.term.dispose();panes.get(rec.id)?.element.remove();panes.delete(rec.id);displayPrefs.delete(rec.id);try{localStorage.removeItem('aide.terminal.display.'+rec.id);}catch(_){}sessions=sessions.filter(s=>s.id!==rec.id);selected=null;if(sessions.length)select(sessions[0].id);else render();}
     catch(error){fail(error);}
   };
   $('session-visible').onchange=async()=>{const rec=current();if(!rec)return;try{const result=await enqueue('visibility',{id:rec.id,visible:$('session-visible').checked});Object.assign(rec,result.session);render();}catch(error){render();fail(error);}};
@@ -258,6 +264,9 @@
   $('relay-connect').onclick=async()=>{const rec=current();if(!rec?.relayEnabled||relayConnecting)return;relayConnecting=true;$('relay-connect').disabled=true;try{const result=await enqueue('relay_connect',{id:rec.id,identityFile:rec.identityFile,identitySource:rec.identitySource});Object.assign(rec,result.session);select(rec.id);}catch(error){message('中继连接失败：'+error.message);}finally{relayConnecting=false;render();}};
   $('relay-script').onclick=async()=>{const rec=current();if(!rec?.relayEnabled)return;try{const result=await enqueue('relay_script',{id:rec.id});const output=bytes(result.data);window.parent.postMessage({type:'aide.workbench.export',protocol:1,pluginId:'terminal',requestId:'export_'+(++exportId),name:result.name,bytes:output.buffer},'*',[output.buffer]);}catch(error){fail(error);}};
   setInterval(()=>{if(current()?.relayEnabled&&!sessionReconnecting&&!relayConnecting&&!sessions.some(rec=>rec.status==='running')&&!paused&&!$('relay-probe').disabled)$('relay-probe').click();},15000);
+  $('display-settings').onclick=()=>{const rec=current();if(!rec)return;applyDisplayPrefs(rec.id);$('display-dialog').showModal();};
+  $('close-display').onclick=()=>$('display-dialog').close();
+  for(const [id,key] of [['show-line-numbers','lineNumbers'],['show-timestamps','timestamps']])$(id).onchange=async()=>{const rec=current();if(!rec)return;const prefs=prefsFor(rec.id);prefs[key]=$(id).checked;applyDisplayPrefs(rec.id);fitSelected();try{const result=await enqueue('display',{id:rec.id,lineNumbers:prefs.lineNumbers,timestamps:prefs.timestamps});Object.assign(rec,result.session);try{localStorage.setItem('aide.terminal.display.'+rec.id,JSON.stringify(prefs));}catch(_){}render();}catch(error){prefs[key]=!$(id).checked;applyDisplayPrefs(rec.id);fitSelected();fail(error);}};
   $('logging').onclick=async()=>{const rec=current();if(!rec)return;try{const result=await enqueue('logging',{id:rec.id,enabled:!rec.logging});Object.assign(rec,result.session);render();}catch(error){fail(error);}};
   $('find').onclick=()=>{$('search-bar').hidden=false;$('search-input').focus();fitSelected();};
   $('search-close').onclick=()=>{$('search-bar').hidden=true;panes.get(selected)?.search.clearDecorations();fitSelected();};
