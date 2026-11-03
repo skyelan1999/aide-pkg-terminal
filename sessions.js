@@ -69,10 +69,11 @@ class Sessions {
       if (space.records.size >= MAX_SESSIONS) break;
       if (['starting','running'].includes(rec.status)) { rec.status = 'interrupted'; rec.endedAt = new Date().toISOString(); }
       rec.worker = null; rec.history = Buffer.alloc(0); rec.base = rec.offset = 0;
+      rec.logLineNumber=0;rec.logLineStart=true;
       // Restore a bounded output tail. Live processes are deliberately never auto-restarted.
       for (let i = LOG_FILES - 1; i >= 0; i--) {
         const log = this.logPath(space, rec.id, i);
-        if (fs.existsSync(log)) this.remember(rec, readPrivate(log).subarray(-HISTORY));
+        if (fs.existsSync(log)) {const bytes=readPrivate(log);rec.logLineNumber+=(bytes.toString('binary').match(/\n/g)||[]).length;if(i===0&&bytes.length)rec.logLineStart=bytes[bytes.length-1]===10;this.remember(rec,bytes.subarray(-HISTORY));}
       }
       space.records.set(rec.id, rec);
       this.persist(space, rec);
@@ -82,7 +83,7 @@ class Sessions {
   }
   public(rec) {
     const {copiedFrom,x11Enabled=false,x11Display,x11AuthorityFile,terminalType,telnetLocalEcho=false,connectionRole,multicast,visibleToAide=true,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError} = rec;
-    return {copiedFrom,x11Enabled,x11Display,x11AuthorityFile,terminalType,telnetLocalEcho,copyable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',copyConnectable:!['serial','tcp-server'].includes(rec.kind),connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError};
+    return {copiedFrom,x11Enabled,x11Display,x11AuthorityFile,terminalType,telnetLocalEcho,copyable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',copyConnectable:!['serial','tcp-server'].includes(rec.kind),connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError,displayLineNumbers:rec.displayLineNumbers===true,displayTimestamps:rec.displayTimestamps===true,displaySettingsVersion:rec.displaySettingsVersion||0};
   }
   persist(space, rec) {
     const temporary = path.join(space.dir, rec.id + '.json.tmp');
@@ -95,18 +96,29 @@ class Sessions {
     if (rec.history.length > HISTORY) rec.history = rec.history.subarray(-HISTORY);
     rec.base = rec.offset - rec.history.length;
   }
+  logOutput(rec,buffer) {
+    if(rec.logLineNumber===undefined)rec.logLineNumber=0;if(rec.logLineStart===undefined)rec.logLineStart=true;
+    const annotate=rec.displayLineNumbers||rec.displayTimestamps,chunks=[];let start=0;
+    for(let i=0;i<buffer.length;i++){
+      if(rec.logLineStart){rec.logLineNumber++;if(annotate){const parts=[];if(rec.displayLineNumbers)parts.push(String(rec.logLineNumber));if(rec.displayTimestamps)parts.push(new Date().toISOString());chunks.push(Buffer.from('['+parts.join(' ')+'] '));}rec.logLineStart=false;}
+      if(buffer[i]===10){chunks.push(buffer.subarray(start,i+1));start=i+1;rec.logLineStart=true;}
+    }
+    if(start<buffer.length){if(start===0&&rec.logLineStart){rec.logLineNumber++;if(annotate){const parts=[];if(rec.displayLineNumbers)parts.push(String(rec.logLineNumber));if(rec.displayTimestamps)parts.push(new Date().toISOString());chunks.push(Buffer.from('['+parts.join(' ')+'] '));}rec.logLineStart=false;}chunks.push(buffer.subarray(start));}
+    return annotate?Buffer.concat(chunks):buffer;
+  }
   output(space, rec, buffer) {
+    const logged=this.logOutput(rec,buffer);
     if (rec.logging && !rec.logError) {
       try {
         const log = this.logPath(space, rec.id);
-        if (fs.existsSync(log) && fs.lstatSync(log).size + buffer.length > LOG_BYTES) {
+        if (fs.existsSync(log) && fs.lstatSync(log).size + logged.length > LOG_BYTES) {
           fs.rmSync(this.logPath(space, rec.id, LOG_FILES - 1), {force:true});
           for (let i = LOG_FILES - 2; i >= 0; i--) {
             const old = this.logPath(space, rec.id, i);
             if (fs.existsSync(old)) fs.renameSync(old, this.logPath(space, rec.id, i + 1));
           }
         }
-        writePrivate(log, buffer, true);
+        writePrivate(log, logged, true);
       } catch (_) {
         rec.logError = '日志写入失败，请检查存储空间与权限';
         try { this.persist(space, rec); } catch (_) { /* output remains available in memory */ }
@@ -459,6 +471,7 @@ class Sessions {
     if(converted){const {session,communication:result}=await this.create(workspace,{...converted,name:input.name||name});return {...result,sessionId:session.id};}
     if(space.disabledTools?.includes('terminal_'+name))throw Error('通信工具已被管理员禁用');
     if(name==='ssh_fingerprint')return comm.fingerprint(args.arguments||{});
+    const sessionMethods={session_logging:'logging',session_display:'display',session_configure:'configure',session_read:'read',session_visibility:'visibility'};if(sessionMethods[name])return this[sessionMethods[name]](workspace,input);
     const values={...(args.arguments||{})};
     if(name==='ssh_connect'&&typeof workspace==='object'&&workspace.identityMaterial){values.privateKey=Buffer.from(workspace.identityMaterial,'base64').toString();values.authType='publickey';}
     return comm.call(name,values);
@@ -510,6 +523,77 @@ class Sessions {
     if (typeof args.enabled !== 'boolean') throw Error('enabled 须为布尔值');
     rec.logging = args.enabled; delete rec.logError; this.persist(space,rec);
     return {session:this.public(rec)};
+  }
+  display(workspace,args) {
+    const space=this.space(workspace),rec=this.get(space,args.id,workspace);
+    if(typeof args.lineNumbers!=='boolean'||typeof args.timestamps!=='boolean')throw Error('显示设置须为布尔值');
+    rec.displayLineNumbers=args.lineNumbers;rec.displayTimestamps=args.timestamps;rec.displaySettingsVersion=1;this.persist(space,rec);
+    return {session:this.public(rec)};
+  }
+  configure(workspace,args) {
+    const space=this.space(workspace),rec=this.get(space,args.id,workspace),editable=['name','cwd','host','port','username','auth','identityFile','identitySource','devicePath','baudRate','dataBits','stopBits','parity','flowControl','bindPort','multicast','terminalType','telnetLocalEcho','x11Enabled','x11Display','x11AuthorityFile','cols','rows','logging','visibleToAide','displayLineNumbers','displayTimestamps','relay'];
+    if(!editable.some(key=>args[key]!==undefined))throw Error('请至少提供一个要修改的会话设置');
+    if(args.visibleToAide!==undefined&&workspace?.workbench!==true)throw Error('仅工作台用户可修改会话可见性');
+    for(const key of ['host','port'])if(args[key]!==undefined&&!['ssh','telnet','tcp','udp',...(key==='port'?['tcp-server']:[])].includes(rec.kind))throw Error(key+' 不适用于此会话类型');
+    for(const key of ['username','auth','identityFile','identitySource'])if(args[key]!==undefined&&rec.kind!=='ssh')throw Error(key+' 仅适用于 SSH 会话');
+    for(const key of ['terminalType','telnetLocalEcho'])if(args[key]!==undefined&&rec.kind!=='telnet')throw Error(key+' 仅适用于 Telnet 会话');
+    for(const key of ['x11Enabled','x11Display','x11AuthorityFile'])if(args[key]!==undefined&&rec.kind!=='ssh')throw Error(key+' 仅适用于 SSH 会话');
+    if(args.cwd!==undefined&&!['local','workspace','ssh'].includes(rec.kind))throw Error('cwd 仅适用于 Shell 会话');
+    if(rec.kind==='tcp'&&rec.connectionRole!=='client'&&(args.host!==undefined||args.port!==undefined))throw Error('已接入的 TCP 会话不能修改其远端地址');
+    if(rec.kind==='tcp-server'&&args.host!==undefined)throw Error('TCP 监听地址由系统固定');
+    if(args.multicast!==undefined&&rec.kind!=='udp')throw Error('multicast 仅适用于 UDP 会话');
+    for(const key of ['devicePath','baudRate','dataBits','stopBits','parity','flowControl'])if(args[key]!==undefined&&rec.kind!=='serial')throw Error(key+' 仅适用于串口会话');
+    if(args.bindPort!==undefined&&rec.kind!=='udp')throw Error('bindPort 仅适用于 UDP 会话');
+    if(args.host!==undefined&&!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(args.host)&&!/^[a-fA-F0-9:]+$/.test(args.host))throw Error('主机名无效');
+    if(args.username!==undefined&&!/^[a-zA-Z0-9_][a-zA-Z0-9_.@-]*$/.test(args.username))throw Error('用户名无效');
+    let reconnect=false;
+    if(args.name!==undefined)rec.name=text(args.name,rec.name,80);
+    if(args.cwd!==undefined){const cwd=text(args.cwd,rec.cwd,512);if(path.isAbsolute(cwd)||cwd.split(/[\\/]/).includes('..'))throw Error('目录路径必须位于当前工作区内');if(rec.kind==='local')inside(space.root,cwd);if(cwd!==rec.cwd)reconnect=true;rec.cwd=cwd;}
+    for(const [key,min,max] of [['port',1,65535],['baudRate',1,4000000],['dataBits',5,8],['bindPort',0,65535],['cols',20,400],['rows',5,200]])if(args[key]!==undefined){rec[key]=integer(args[key],rec[key]||min,min,max);if(['port','baudRate','dataBits','bindPort'].includes(key))reconnect=true;}
+    if(args.terminalType!==undefined){rec.terminalType=text(args.terminalType,rec.terminalType||'xterm-256color',64);if(!/^[A-Za-z0-9_.+-]+$/.test(rec.terminalType))throw Error('Telnet 终端类型无效');reconnect=true;}
+    if(args.telnetLocalEcho!==undefined){if(typeof args.telnetLocalEcho!=='boolean')throw Error('telnetLocalEcho 须为布尔值');rec.telnetLocalEcho=args.telnetLocalEcho;reconnect=true;}
+    if(args.x11Enabled!==undefined){if(typeof args.x11Enabled!=='boolean')throw Error('x11Enabled 须为布尔值');rec.x11Enabled=args.x11Enabled;reconnect=true;}
+    for(const key of ['x11Display','x11AuthorityFile'])if(args[key]!==undefined){const value=String(args[key]);if(value.length>512||/[\x00-\x1f\x7f]/.test(value))throw Error(key+' 参数无效');if(value)rec[key]=value;else delete rec[key];reconnect=true;}
+    if(args.stopBits!==undefined){const value=Number(args.stopBits);if(![1,1.5,2].includes(value))throw Error('停止位设置无效');rec.stopBits=value;reconnect=true;}
+    if(args.parity!==undefined){if(!['none','even','odd','mark','space'].includes(args.parity))throw Error('校验设置无效');rec.parity=args.parity;reconnect=true;}
+    if(args.flowControl!==undefined){if(typeof args.flowControl!=='boolean')throw Error('flowControl 须为布尔值');rec.flowControl=args.flowControl;reconnect=true;}
+    for(const key of ['host','username','devicePath'])if(args[key]!==undefined){rec[key]=text(args[key],rec[key]||'',key==='host'?253:key==='username'?64:512);reconnect=true;}
+    if(args.identityFile!==undefined){const value=String(args.identityFile);if(value)value=text(value,rec.identityFile||'',512);if(value)rec.identityFile=value;else delete rec.identityFile;reconnect=true;}
+    if(args.identitySource!==undefined){const value=String(args.identitySource);if(value)value=text(value,rec.identitySource||'',512);if(value)rec.identitySource=value;else delete rec.identitySource;reconnect=true;}
+    if(args.auth!==undefined){if(!['default','password','key'].includes(args.auth))throw Error('认证方式无效');rec.auth=args.auth;reconnect=true;}
+    for(const key of ['logging','visibleToAide','displayLineNumbers','displayTimestamps','multicast'])if(args[key]!==undefined){if(typeof args[key]!=='boolean')throw Error(key+' 须为布尔值');rec[key]=args[key];if(key==='displayLineNumbers'||key==='displayTimestamps')rec.displaySettingsVersion=1;if(key==='multicast')reconnect=true;}
+    if(args.auth==='key'&&rec.kind==='ssh'&&!rec.identityFile)throw Error('key 认证须指定私钥文件');
+    if(args.relay!==undefined){
+      if(!args.relay||typeof args.relay!=='object'||Array.isArray(args.relay)||typeof args.relay.enabled!=='boolean')throw Error('relay 须包含 enabled 布尔值');
+      const relayFile=path.join(space.dir,rec.id+'.relay.json');
+      if(!args.relay.enabled){fs.rmSync(relayFile,{force:true});rec.relayEnabled=false;delete rec.relayEndpoint;rec.relayOnline='unknown';reconnect=true;}
+      else {
+        if(!['ssh','telnet','tcp','udp','serial'].includes(rec.kind))throw Error('中继支持 SSH、Telnet、TCP、UDP 和串口会话');
+        let previous={};try{previous=this.relayConfig(space,rec);}catch(_){}
+        const host=text(args.relay.host,previous.host||'',253),port=integer(args.relay.port,previous.port||17780,1,65535),key=String(args.relay.key||previous.key||crypto.randomBytes(32).toString('base64')).trim(),keyBytes=relay.keyBytes(key);
+        if(!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(host))throw Error('中继主机名无效');
+        const target={kind:rec.kind};if(rec.kind==='serial')Object.assign(target,{devicePath:rec.devicePath,baudRate:rec.baudRate||115200,dataBits:rec.dataBits||8,stopBits:rec.stopBits||1,parity:rec.parity||'none',flowControl:!!rec.flowControl});else Object.assign(target,{host:rec.host||'127.0.0.1',port:rec.port||(rec.kind==='ssh'?22:rec.kind==='telnet'?23:undefined)});if(rec.kind==='telnet')Object.assign(target,{terminalType:rec.terminalType||'xterm-256color',telnetLocalEcho:!!rec.telnetLocalEcho});
+        if(rec.kind==='ssh')Object.assign(target,{username:rec.username,auth:rec.auth||'default',identityFile:rec.identityFile,identitySource:rec.identitySource,x11Enabled:!!rec.x11Enabled,x11Display:rec.x11Display,x11AuthorityFile:rec.x11AuthorityFile});
+        const config={id:crypto.createHmac('sha256',keyBytes).update('aide-relay-v1-id').digest('hex').slice(0,24),kind:rec.kind,host,port,key,listenHost:'0.0.0.0',listenPort:port,target};
+        writePrivate(relayFile,JSON.stringify(config));rec.relayEnabled=true;rec.relayEndpoint=host+':'+port;rec.relayOnline='unknown';reconnect=true;
+      }
+    }
+    if(rec.relayEnabled&&reconnect&&args.relay===undefined){const config=this.relayConfig(space,rec),target={kind:rec.kind};if(rec.kind==='serial')Object.assign(target,{devicePath:rec.devicePath,baudRate:rec.baudRate||115200,dataBits:rec.dataBits||8,stopBits:rec.stopBits||1,parity:rec.parity||'none',flowControl:!!rec.flowControl});else Object.assign(target,{host:rec.host||'127.0.0.1',port:rec.port||(rec.kind==='ssh'?22:rec.kind==='telnet'?23:undefined)});if(rec.kind==='telnet')Object.assign(target,{terminalType:rec.terminalType||'xterm-256color',telnetLocalEcho:!!rec.telnetLocalEcho});if(rec.kind==='ssh')Object.assign(target,{username:rec.username,auth:rec.auth||'default',identityFile:rec.identityFile,identitySource:rec.identitySource,x11Enabled:!!rec.x11Enabled,x11Display:rec.x11Display,x11AuthorityFile:rec.x11AuthorityFile});config.target=target;writePrivate(path.join(space.dir,rec.id+'.relay.json'),JSON.stringify(config));}
+    if((args.cols!==undefined||args.rows!==undefined)&&rec.worker&&!rec.transport)this.resize(workspace,{id:rec.id,cols:rec.cols,rows:rec.rows});
+    this.persist(space,rec);
+    return {session:this.public(rec),requiresReconnect:reconnect};
+  }
+  read(workspace,args) {
+    const space=this.space(workspace),rec=this.get(space,args.id,workspace),limit=integer(args.limit,100,1,500),fromTime=args.fromTime===undefined?null:Date.parse(args.fromTime),toTime=args.toTime===undefined?null:Date.parse(args.toTime);
+    if(args.fromTime!==undefined&&!Number.isFinite(fromTime)||args.toTime!==undefined&&!Number.isFinite(toTime))throw Error('时间须为可解析的 ISO 时间');
+    if(fromTime!==null||toTime!==null){if(args.fromLine!==undefined||args.toLine!==undefined)throw Error('行范围和时间范围请分开查询');}
+    const first=integer(args.fromLine,1,1,Number.MAX_SAFE_INTEGER),last=args.toLine===undefined?Number.MAX_SAFE_INTEGER:integer(args.toLine,first,1,Number.MAX_SAFE_INTEGER);if(last<first)throw Error('结束行不能早于起始行');
+    const chunks=[];for(let index=LOG_FILES-1;index>=0;index--){const file=this.logPath(space,rec.id,index);if(fs.existsSync(file))chunks.push(readPrivate(file));}
+    const lines=chunks.length?Buffer.concat(chunks).toString('utf8').split('\n'):[];if(lines.at(-1)==='')lines.pop();const totalLines=lines.length,records=[];let bytes=0,hasMore=false,selectedFrom=null,selectedTo=null;
+    for(let i=0;i<lines.length;i++){const lineNumber=i+1,textLine=lines[i],match=/^\[(?:(\d+)\s+)?(\d{4}-\d\d-\d\dT[^\]]+Z)\]\s/.exec(textLine);let include;if(fromTime!==null||toTime!==null){if(!match)continue;const time=Date.parse(match[2]);include=(fromTime===null||time>=fromTime)&&(toTime===null||time<=toTime);}else include=lineNumber>=first&&lineNumber<=last;if(!include)continue;const line=textLine.length>8192?textLine.slice(0,8192)+'…[行已截断]':textLine,encoded=Buffer.byteLength(line,'utf8')+1;if(records.length>=limit||bytes+encoded>128*1024){hasMore=true;break;}records.push(line);bytes+=encoded;selectedFrom??=lineNumber;selectedTo=lineNumber;}
+    if((fromTime!==null||toTime!==null)&&!records.length)throw Error('指定时间范围内没有可读取的日志行');
+    const nextLine=hasMore&&selectedTo!==null?selectedTo+1:null;
+    return {firstLine:records.length?selectedFrom:null,lastLine:records.length?selectedTo:null,totalLines,text:records.join('\n'),hasMore,nextLine,limit};
   }
   logs(workspace, args) {
     const space = this.space(workspace), rec = this.get(space,args.id,workspace);

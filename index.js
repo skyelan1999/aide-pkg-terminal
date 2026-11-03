@@ -25,6 +25,9 @@ module.exports = {
     add('terminal_session_resize','调整终端 PTY 大小',run('resize'),{...id,cols:{type:'integer'},rows:{type:'integer'}},['id','cols','rows']);
     add('terminal_session_close','结束指定后台会话，保留日志',run('close'),id,['id']);
     add('terminal_session_logging','启用或暂停指定会话的输出日志',run('logging'),{...id,enabled:{type:'boolean'}},['id','enabled']);
+    add('terminal_session_display','保存会话行号和时间戳显示设置，并将之后记录的日志行加上已启用标记',run('display'),{...id,lineNumbers:{type:'boolean'},timestamps:{type:'boolean'}},['id','lineNumbers','timestamps']);
+    add('terminal_session_configure','修改已有会话的手动配置。连接目标等配置在下次手动重连时生效；不会自动重连或中断当前会话。中继密钥只写入私有配置，不会从工具结果返回。',run('configure'),{...id,name:{type:'string'},cwd:{type:'string'},host:{type:'string'},port:{type:'integer'},username:{type:'string'},auth:{type:'string',enum:['default','password','key']},identityFile:{type:'string'},identitySource:{type:'string'},devicePath:{type:'string'},baudRate:{type:'integer'},dataBits:{type:'integer'},stopBits:{type:'number'},parity:{type:'string',enum:['none','even','odd','mark','space']},flowControl:{type:'boolean'},bindPort:{type:'integer'},multicast:{type:'boolean'},terminalType:{type:'string'},telnetLocalEcho:{type:'boolean'},x11Enabled:{type:'boolean'},x11Display:{type:'string'},x11AuthorityFile:{type:'string'},cols:{type:'integer'},rows:{type:'integer'},logging:{type:'boolean'},visibleToAide:{type:'boolean'},displayLineNumbers:{type:'boolean'},displayTimestamps:{type:'boolean'},relay:{type:'object',properties:{enabled:{type:'boolean'},host:{type:'string'},port:{type:'integer'},key:{type:'string'}}}},['id']);
+    add('terminal_session_read','按行号或时间范围读取现有会话日志；默认最多返回100行，最多500行且128 KiB，适合分段读取避免占用过多上下文。',run('read'),{...id,fromLine:{type:'integer'},toLine:{type:'integer'},fromTime:{type:'string'},toTime:{type:'string'},limit:{type:'integer'}},['id']);
     add('terminal_session_logs','分页读取指定会话磁盘日志（base64），返回轮转文件身份',run('logs'),{...id,index:{type:'integer'},offset:{type:'integer'},identity:{type:'string'}},['id']);
     add('terminal_session_delete','永久删除已结束会话的记录与日志，须用户明确要求',run('remove'),id,['id']);
     add('terminal_session_visibility','仅工作台用户可修改会话对 Aide 的可见性',run('visibility'),{...id,visible:{type:'boolean'}},['id','visible']);
@@ -32,7 +35,7 @@ module.exports = {
     add('terminal_session_relay_status','检测可见会话的加密中继是否在线，不打开目标设备',run('relayStatus'),id,['id']);
     add('terminal_session_relay_connect','按保存的配置连接或重新连接已有会话（包括中继）；仅在用户明确要求时调用，保留记录与日志',run('reconnect'),{...id,identityFile:{type:'string'},identitySource:{type:'string'}},['id']);
     const definitions=require('./communications').definitions();
-    add('terminal_session_comm','调用当前工作区内的通信工具；连接、发送、回放、代理和模拟服务仅在用户明确授权时调用',run('commCall'),{action:{type:'string',enum:[...definitions.map(d=>d.name.replace(/^terminal_/,'')),'ssh_fingerprint']},arguments:{type:'object'}} ,['action']);
+    add('terminal_session_comm','调用当前工作区内的通信工具；连接、发送、回放、代理和模拟服务仅在用户明确授权时调用',run('commCall'),{action:{type:'string',enum:[...definitions.map(d=>d.name.replace(/^terminal_/,'')),'ssh_fingerprint','session_logging','session_display','session_configure','session_read','session_visibility']},arguments:{type:'object'}} ,['action']);
     for(const definition of definitions){const action=definition.name.replace(/^terminal_/,'');ctx.tool({...definition,handler:(args,api)=>run('commCall')({action,arguments:args},api)});}
     add('terminal_ssh_fingerprint','只读获取SSH主机指纹，须用户通过可信途径核验后才能用于连接',(args,api)=>run('commCall')({action:'ssh_fingerprint',arguments:args},api),{host:{type:'string'},port:{type:'integer'},username:{type:'string'}},['host']);
     ctx.slot({id:'terminal-panel',name:'设备终端工作台'});ctx.provide('terminal');

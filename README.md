@@ -1,10 +1,10 @@
 # Terminal · Aide 设备终端工作台
 
-**1.6.0；实际发行状态以 GitHub Release 为准。** 要求配套 Aide **v0.1.18.0-RC2 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**1.7.0；实际发行状态以 GitHub Release 为准。** 要求配套 Aide **v0.1.18.0-RC2 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
 
 ## 安装与兼容
 
-以 [v1.6.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.6.0) 是否公开为发行状态依据。正式归档位于 `packages/v1.6.0/aide-pkg-terminal-v1.6.0.zip` 和同目录 `SHA256SUMS`；发布后从 Release 说明的固定提交链接下载，校验 `sha256sum -c SHA256SUMS` 后导入。仅出现仓库文件或本段说明不表示已公开发行。
+以 [v1.7.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.7.0) 是否公开为发行状态依据。正式归档位于 `packages/v1.7.0/aide-pkg-terminal-v1.7.0.zip` 和同目录 `SHA256SUMS`；发布后从 Release 说明的固定提交链接下载，校验 `sha256sum -c SHA256SUMS` 后导入。仅出现仓库文件或本段说明不表示已公开发行。
 
 需要 **Aide v0.1.18.0-RC2+**。市场元数据最低版本为 `0.1.18.0 RC2`，不提供降低门槛的 sourceCompatibility；旧 RC1 不应自动升级至此版本。手动 ZIP 导入不经过市场门槛，请先升级宿主。运行时 `sessionCopyVersion=1` 仍作复制入口二次检查。归档不打包 xauth/X Server，部署前提见下方说明。历史1.5.3归档保持不变。
 
@@ -24,7 +24,7 @@
 
 SSH 首次连接在终端显示主机指纹，请通过可信途径核对后输入 `yes`。指纹变化由 OpenSSH 拒绝连接；本插件不会自动忽略校验。认证方式可选默认身份、用户名和密码、私钥文件。密码和加密私钥口令在终端提示后输入；记录只保存用户名、地址、端口、认证方式与私钥文件位置，不保存密码和口令。私钥可手动填写当前来源内的相对路径，或点击“从工作区 / 引用选择…”浏览当前工作区以及已启用、允许访问的本地、Skill、SFTP、工作区 SFTP 引用来源。私钥内容由宿主限量读取，经 daemon 私有通道交给 Linux 内存文件，不传给网页、不加入工具参数或连接记录，也不新增私钥磁盘副本。原始私钥文件仍由用户管理。没有启用 agent 转发、端口转发，也不会读取用户 SSH config 的 ProxyCommand。
 
-工作台按本地、SSH、历史会话分组，支持名称/主机搜索与运行状态筛选；标签栏只显示活动会话和当前选中的历史会话。桌面右侧显示真实连接状态、目标、起始目录、创建时间和日志详情。工作台在当前 Aide 页面内打开，窄屏使用会话抽屉。提供 xterm 终端、窗口尺寸适配、Ctrl+C、输出查找、日志开关与下载。命令和按键直接发送到目标会话，请确认当前标签对应的设备。关闭面板不会自动发送尚未送达的输入，也不会重试结果不确定的写操作。
+工作台按本地、SSH、历史会话分组，支持名称/主机搜索与运行状态筛选；标签栏只显示活动会话和当前选中的历史会话。桌面右侧显示真实连接状态、目标、起始目录、创建时间和日志详情。工作台在当前 Aide 页面内打开，窄屏使用会话抽屉。提供 xterm 终端、窗口尺寸适配、Ctrl+C、输出查找、日志开关与下载。每个会话可在“终端设置”中独立打开左侧行号和时间戳；偏好保存到会话记录并随会话 ID 恢复。显示标记不进入终端输入、实时输出、选择或复制内容；启用日志时，之后落盘的新日志行会保存已启用的行号和/或 ISO 时间戳，已有日志不会补写，暂停日志时不记录标记。日志 API 可按 1 起始行号或 ISO 时间范围读取，默认100行、最多500行及128 KiB，并返回 `hasMore` / `nextLine` 供分段读取；按时间读取仅匹配日志中实际带时间戳的行。历史日志回放显示本次恢复时间，该显示时间不等于原始接收时间。命令和按键直接发送到目标会话，请确认当前标签对应的设备。关闭面板不会自动发送尚未送达的输入，也不会重试结果不确定的写操作。
 
 SSH 工作区 Shell 沿用工作区设置中的密码、私钥或引用私钥认证，不在终端面板再次保存一份凭据。连接固定到已认证主连接；切换工作区、主连接断开后不会自动改接其他主机。远程主机需具备 `/bin/bash`，所填起始目录用于工作区 Shell；设备 SSH 登录后的目录由远端账户决定。
 
@@ -78,7 +78,7 @@ Aide 可以通过下列会话工具列出、创建和操作同一工作区的终
 
 ## 工具兼容
 
-保留 `terminal-run(command)` 的命令提案行为与 `terminal-history(path)` 的只读目录列举行为，没有将旧提案工具改成直接执行。新增 `terminal_session_list/create/input/poll/resize/close/logging/logs/delete/files` 工具供受控工作台调用；创建和输入会直接执行，模型调用时同样需要用户的明确意图与授权。
+保留 `terminal-run(command)` 的命令提案行为与 `terminal-history(path)` 的只读目录列举行为，没有将旧提案工具改成直接执行。新增 `terminal_session_list/create/input/poll/resize/close/logging/display/configure/read/logs/delete/files` 等工具供受控工作台调用。Aide 可先用 `terminal_session_list` 选择已打开会话，再调用 `terminal_session_read` 以行范围（如 `fromLine:128,toLine:133`、`fromLine:128` 或 `toLine:50`）或时间范围读取；`limit` 默认100、最大500，响应最多128 KiB，可用 `nextLine` 继续。`terminal_session_configure` 可修改已有会话的名称、目录、目标、认证方式/私钥引用、串口/网络参数、中继、日志、行号/时间戳及 PTY 尺寸；连接目标参数只保存供下次手动重连，PTY 尺寸可即时调整。密码和私钥口令不保存，私钥路径只引用现有文件；中继密钥写入私有配置且不会从工具结果返回。会话对 Aide 的可见性仅能从认证工作台修改。创建、输入和连接需要明确的用户指令与授权。
 
 ## 开发与验证
 
@@ -105,7 +105,7 @@ node test/browser-layout.cjs
 
 ## 已发布旧版
 
-[1.0.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.0.0) 和 `packages/v1.0.0/` 中的归档保持不变。1.0.0 仅提供命令提案与目录工具，没有本工作台能力。[插件市场](https://skyelan1999.github.io/aide-pkg-shop/) 本次更新为 1.5.2 预发布，要求 `terminal-workbench-v1` 能力；旧宿主会显示不兼容。历史 1.0.0 安装包仍保留。
+[1.0.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.0.0) 和 `packages/v1.0.0/` 中的归档保持不变。1.0.0 仅提供命令提案与目录工具，没有本工作台能力。[插件市场](https://skyelan1999.github.io/aide-pkg-shop/) 当前正式版本为 1.7.0，要求 `terminal-workbench-v1` 能力以及 Aide v0.1.18.0-RC2+；旧宿主会显示不兼容。历史 1.0.0 安装包仍保留。
 
 ## 1.4.2 串口连接与选择修复
 
@@ -155,6 +155,10 @@ Shell/SSH 命令、设备收发与日志仍沿用原会话机制；中继在线�
 ## 1.5.3：TCP 代理背压（Aide #588）
 
 双向 pipe 随接收端的 drain 暂停/恢复来源，保留半关闭，错误或关闭时清理两端；连接数超额时先拒绝再建后端。真实慢接收端回归在两个方向各发送 32 MiB，验证拥塞时来源暂停、队列受控和恢复后的长度/SHA256 一致。该观测不是所有 OS 的固定队列上限。保留 1.5.2 输入调度修复；安装/升级会结束现有设备连接，不自动重放输入。
+
+## 1.7.0：可配置会话与有界日志读取
+
+新增 `terminal_session_display`、`terminal_session_configure`、`terminal_session_read`。显示设置保存在会话记录，开启后新日志行可含行号/ISO 时间戳。Aide 可按行号或时间读取日志，响应默认100行，最多500行与128 KiB，并支持 `hasMore`/`nextLine` 分页；按时间读取要求记录时间戳。现有会话可配置 Shell、SSH、Telnet、TCP、UDP、串口及中继对应的手工参数。目标改变只对下次手动重连生效；密码和私钥口令不保存，中继密钥不从 API 返回。工作台权限仍仅允许受信工作台修改可见性。
 
 ## 1.6.0：会话复制、Telnet 与 X11
 
