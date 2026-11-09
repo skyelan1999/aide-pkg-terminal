@@ -1,0 +1,17 @@
+{
+  "version": "1.7.1",
+  "sourceCommit": "f198989f79ced47356c7694a68ece811542ff529",
+  "ci": {"workflow": "Verify Terminal runtime", "run": 42638039001, "conclusion": "success",
+         "jobs": ["workbench", "x11-render", "runtime (ubuntu-24.04)", "runtime (ubuntu-24.04-arm)"]},
+  "archive": {"path": "packages/v1.7.1/aide-pkg-terminal-v1.7.1.zip", "bytes": 1082596,
+              "sha256": "e292e74fab708ef86ff443af3d5f7add9fbb35aaf2e4a2e369667f2646c6a8c6"},
+  "dockerFullSuite": {"imageBase": "node:24-bookworm-slim", "dockerfile": "test/Dockerfile.test",
+                      "pythonDependencies": ["python3-cryptography", "python3-serial"],
+                      "systemDependencies": ["openssh-client", "openssh-server", "udev", "xauth", "xvfb"],
+                      "result": "67/67 pass, 0 fail"},
+  "hostWorkbenchAcceptance": {"host": "isolated AIDE 0.1.18.0 RC3 container, port 8098",
+                              "sandbox": "allow-scripts allow-downloads",
+                              "checks": ["TCP send form marker received", "UDP send form marker received", "serial send form marker received"],
+                              "pageErrors": []},
+  "macosLocal": {"note": "14 environment-only failures (missing python cryptography, sshd/PTY, udevadm); the same files pass in the Docker suite"}
+}
