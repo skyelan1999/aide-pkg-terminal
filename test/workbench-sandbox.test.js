@@ -4,7 +4,10 @@ const root=path.join(__dirname,'..');
 
 test('workbench send control is click-driven because the AIDE iframe sandbox has no allow-forms (issue #35)',()=>{
  for(const file of ['src/workbench.html','workbench.html']){
-  const html=fs.readFileSync(path.join(root,file),'utf8');
+  const target=path.join(root,file);
+  // 提取出来的运行包只有构建产物，没有 src/；源码树则两份都校验。
+  if(!fs.existsSync(target))continue;
+  const html=fs.readFileSync(target,'utf8');
   assert(html.includes('<button type="button" id="send-packet"'),file+' send control must not rely on native form submission');
   assert(!html.includes('<button type="submit" id="send-packet"'),file+' must not keep a submit send control');
   assert(html.includes('id="communication-send"'),file+' keeps the send form container for layout');
