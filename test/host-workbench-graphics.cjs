@@ -50,11 +50,8 @@ async function until(fn,label,timeout=30000){const end=Date.now()+timeout;while(
   await delay(3000);
   await until(async()=>!(await frame('#graphical').isDisabled()),'managed viewer available',40000);
   checks.push('managed X display and viewer port assigned to the SSH session');
-  await frame('#graphical').click();
-  await delay(1500);
-  const notice=await frame('#notice').textContent().catch(()=>'');
-  console.log('notice after graphical click:',notice);
-  await until(async()=>await frame('#graphical-pane').evaluate(el=>!el.hidden),'graphical pane');
+  await until(async()=>await frame('#graphical-pane').evaluate(el=>!el.hidden),'graphical pane opens automatically',30000);
+  checks.push('graphical pane opens automatically when the SSH session starts');
   await until(async()=>await frame('#graphical-screen canvas').count()>0,'noVNC canvas');
   await until(async()=>(await frame('#graphical-state').textContent()).includes('远程剪贴板可用'),'noVNC connected',30000);
   checks.push('noVNC connected through the host one-use viewer ticket proxy');

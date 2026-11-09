@@ -428,6 +428,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
     $('graphical').hidden=!graphical;
     $('graphical').disabled=!connected||paused||!rec?.x11ViewerPort;
     $('graphical').title=rec?.x11ViewerPort?'在 Aide 内打开受管 X display 的图形窗口':'图形服务尚未启动';
+    if(graphical&&connected&&!paused&&rec.status==='running'&&rec.x11ViewerPort&&!graphicalAttempted.has(rec.id)){graphicalAttempted.add(rec.id);queueMicrotask(()=>{if(selected===rec.id&&$('graphical-pane').hidden)openGraphical();});}
     $('empty').hidden=!!rec;
     for(const id of ['new-top','new-empty','new-session'])$(id).disabled=!connected;
     for(const id of ['find','logs','logging'])$(id).disabled=!rec;
@@ -446,6 +447,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
     let displayChanged=false;for(const [id,pane] of panes){const prefs=prefsFor(id),signature=prefs.lineNumbers+':'+prefs.timestamps;if(pane.displaySignature!==signature){applyDisplayPrefs(id,pane);if(id===selected)displayChanged=true;}pane.element.hidden=id!==selected;pane.term.options.disableStdin=paused||sessions.find(s=>s.id===id)?.status!=='running';}if(displayChanged)requestAnimationFrame(fitSelected);
   }
   let rfb = null, graphicalSessionId = null, graphicalClipboard = '';
+  const graphicalAttempted = new Set();
   async function writeBrowserClipboard(text) {
     try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
     const area = document.createElement('textarea');area.value = text;area.setAttribute('readonly','');area.style.position='fixed';area.style.left='-9999px';document.body.append(area);area.select();

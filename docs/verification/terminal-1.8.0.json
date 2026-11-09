@@ -18,6 +18,7 @@
       "iframe sandbox remains allow-scripts allow-downloads",
       "X11 forwarding defaults on for a new SSH session",
       "managed X display and viewer port assigned to the SSH session",
+      "graphical pane opens automatically when the SSH session starts",
       "noVNC connected through the host one-use viewer ticket proxy",
       "xterm launched inside the forwarded display and rendered into the workbench canvas",
       "one-click copy from sandboxed workbench reached the host clipboard (execCommand fallback)"
@@ -33,7 +34,7 @@
     "seamless native per-window integration"
   ],
   "candidate_zip": {
-    "bytes": 1246667,
-    "sha256": "d6953ba8ab2c8926560ff8e153c1f22cc9d8419ec39208904a3893ef51c9f044"
+    "bytes": 1246764,
+    "sha256": "1b6b820f485d40bcb1cf7e1179cb239752853ff794a55687cae68548677e0051"
   }
 }
