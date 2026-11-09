@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.0（发行状态以 GitHub Release 为准）
+
+- 新增 MobaXterm 式开箱即用图形窗口：SSH 会话自动分配受管 Xvfb display、私有 Xauthority、openbox、仅 loopback 的 x11vnc 与 websockify，并在 Workbench 内自动打开 noVNC 面板（#42 第一阶段）。
+- 宿主新增一次性 viewer ticket 与同源 `/plugin-viewer/<ticket>/websockify` 反代，CSP 仅对该插件放行宿主确切 origin；沙箱仍为 `allow-scripts allow-downloads`。
+- 远程剪贴板改为按钮触发的用户手势复制，`clipboard` API 失败时降级 `execCommand('copy')`；画布内 Ctrl+V 回填远端。
+- “终端设置”升级为逐会话全参数面板：名称/可见性/日志/显示、SSH 认证与私钥、Telnet、TCP/UDP、串口、起始目录与中继均可按当前会话修改；只提交变化字段，支持“保存并重连”。
+- 修复设置弹窗端口标签重写导致输入框消失、复选框布局换行等问题（#35 回归项）。
+- 验收：插件套件 67/67；真实隔离 AIDE 宿主 + 真实 sshd 的 Workbench 图形与全参数设置脚本全部通过，截图见 `docs/verification/terminal-1.8.0-graphics.png` 与 `terminal-1.8.0-settings.png`。
+
 ## 1.7.1（发行状态以 GitHub Release 为准）
 
 - 修复内嵌工作台无法发送 TCP/UDP/串口数据（#35）：发送按钮不再依赖 iframe 沙箱中被禁用的表单提交，改为显式 click 驱动并防重复提交；不扩大 iframe 权限。

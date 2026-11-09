@@ -1,7 +1,7 @@
 {
   "version": "1.8.0",
   "date": "2026-11-09",
-  "status": "candidate",
+  "status": "published",
   "plugin_suite": {
     "image": "test/Dockerfile.test",
     "passed": 67,
@@ -37,7 +37,7 @@
     "seamless native per-window integration"
   ],
   "candidate_zip": {
-    "bytes": 1246764,
-    "sha256": "1b6b820f485d40bcb1cf7e1179cb239752853ff794a55687cae68548677e0051"
+    "bytes": 1228438,
+    "sha256": "f56f66f7727c15fe16dbc394c0413517a98c354b1e01192d72af41f6023c8dc2"
   }
 }
