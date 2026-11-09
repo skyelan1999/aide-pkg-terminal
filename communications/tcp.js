@@ -152,6 +152,8 @@ module.exports = {
         return new Promise((resolve, reject) => {
           const server = net.createServer((socket) => {
             try {
+              // 异步接入的 socket 也必须受工作区全局通信资源上限约束（issue #12）。
+              if (state.connections.size >= 32 || (typeof ctx.hasCapacity === 'function' && !ctx.hasCapacity())) { socket.destroy(); return; }
               const lis = state.listeners.get(port);
               registerSocket(socket, { role: 'server', listenerPort: port, listenerConns: lis.conns, recording: lis.recording });
             } catch (e) { emitLog('error', 'accept 异常: ' + e.message); }
@@ -243,8 +245,9 @@ module.exports = {
         const proxyId = 'proxy-' + (++state.proxySeq);
         return new Promise((resolve, reject) => {
           const server = net.createServer({ allowHalfOpen: true }, (front) => {
-            // Refuse excess peers before opening an upstream connection.
-            if (state.connections.size >= 32) { front.destroy(); return; }
+            // Refuse excess peers before opening an upstream connection. The cap covers
+            // every communication resource in the workspace, not only TCP connections.
+            if (state.connections.size >= 32 || (typeof ctx.hasCapacity === 'function' && !ctx.hasCapacity())) { front.destroy(); return; }
             const back = net.createConnection({ host: targetHost, port: targetPort, allowHalfOpen: true });
             const rec = newRecording(listenPort, 'proxy');
             const frontEntry = registerSocket(front, { role: 'proxy-front', recording: rec });

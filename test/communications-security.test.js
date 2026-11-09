@@ -18,3 +18,19 @@ test('disabled protocol tools cannot be bypassed through shared session input or
  const context={storageRoot:root,disabledTools:['terminal_udp_send']};const rec=(await m.create(context,{kind:'udp',host:'127.0.0.1',port:9})).session;
  await assert.rejects(m.send(context,{id:rec.id,data:'must not send'}),/管理员禁用/);await assert.rejects(m.commCall(context,{action:'udp_send',arguments:{host:'127.0.0.1',port:9,data:'must not send'}}),/管理员禁用/);
 });
+
+test('SFTP simulator root is canonicalized, accepts a symlinked alias and still rejects escapes (issue #6)',t=>{
+ const {sftpPathGuard,canonicalSftpRoot}=require('../communications/ssh').__test;
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'aide-sftp-realpath-')),outside=fs.mkdtempSync(path.join(os.tmpdir(),'aide-sftp-outside-'));
+ const alias=path.join(os.tmpdir(),'aide-sftp-alias-'+process.pid+'-'+Date.now());
+ t.after(()=>{fs.rmSync(root,{recursive:true,force:true});fs.rmSync(outside,{recursive:true,force:true});try{fs.rmSync(alias,{recursive:false,force:true});}catch(_){}});
+ fs.symlinkSync(root,alias,'dir');
+ const canonical=canonicalSftpRoot(root);assert.equal(canonicalSftpRoot(alias),canonical,'macOS /var and /private/var normalize to one root');
+ const guard=sftpPathGuard(alias);
+ fs.mkdirSync(path.join(root,'nested'));
+ assert.equal(guard('file.txt'),path.join(canonical,'file.txt'));
+ assert.equal(guard('nested/file.txt'),path.join(canonical,'nested','file.txt'));
+ fs.symlinkSync(outside,path.join(root,'escape'),'dir');
+ assert.throws(()=>guard('escape/secret.txt'),/越界/);
+ assert.throws(()=>guard('../outside.txt'),/越界/);
+});

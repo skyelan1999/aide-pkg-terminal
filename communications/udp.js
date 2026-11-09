@@ -2,13 +2,26 @@
 /* comm-udp：常驻 UDP 通讯插件（协议 v1.2 daemon）。
  * 仅用 Node 内置 dgram 模块，零第三方依赖。
  *
- * 安全模型：默认禁用；绑定一律 127.0.0.1；无 raw socket / CAP_NET_RAW。
+ * 安全模型：默认禁用；无目标的直接绑定一律 127.0.0.1；无 raw socket / CAP_NET_RAW。
+ * 带目标的 UDP 会话按内核路由选择的本地源地址绑定，避免绑回环导致 EINVAL（issue #37）。
  * UDP 无连接：每个 socket 绑定一个端口，收包按 (address,port) 来源区分。
  */
 const dgram = require('dgram');
 
 const BOUND_HOST = '127.0.0.1';
 const MAX_PREVIEW = 256;
+const SEND_CLOSED_ERROR = 'UDP 发送结果未确认：会话已关闭';
+
+/* 会话关闭时结算该 socket 上所有未回调的发送：恰好结算一次，结果明确为“未确认”。 */
+function settlePending(entry, error) {
+  if (!entry || !entry.pending) return;
+  for (const record of entry.pending) {
+    if (record.settled) continue;
+    record.settled = true;
+    record.reject(error);
+  }
+  entry.pending.clear();
+}
 
 module.exports = {
   name: 'comm-udp',
@@ -37,6 +50,29 @@ module.exports = {
       return { previewHex: slice.toString('hex'), truncated };
     }
     function nowIso() { return new Date().toISOString(); }
+
+    /* 向目标做一次路由查询，返回内核为该目的地址选择的本地 IPv4 源地址。
+     * 会话 socket 必须绑这个地址，才能把非回环目标发出的报文送出（issue #37）。 */
+    function routeSourceAddress(host, port) {
+      return new Promise((resolve, reject) => {
+        const probe = dgram.createSocket('udp4');
+        let done = false;
+        const finish = (fn, value) => {
+          if (done) return; done = true;
+          try { probe.close(); } catch (_) {}
+          fn(value);
+        };
+        probe.once('error', (err) => finish(reject, new Error('无法确定本地源地址: ' + (err && err.message))));
+        try {
+          probe.connect(port, host, () => {
+            let address = '';
+            try { address = (probe.address() || {}).address || ''; } catch (_) {}
+            if (!address) return finish(reject, new Error('无法确定本地源地址'));
+            finish(resolve, address);
+          });
+        } catch (err) { finish(reject, new Error('无法确定本地源地址: ' + (err && err.message))); }
+      });
+    }
 
     // 规则模拟：对收到的报文匹配并回复来源
     function maybeSimulate(sockEntry, buf, rinfo) {
@@ -75,19 +111,29 @@ module.exports = {
         port: { type: 'number', description: '绑定端口 1..65535' },
         host: { type: 'string', description: '保留；实际绑 127.0.0.1' },
         multicast: { type: 'boolean', description: '是否开启组播回环（setMulticastLoopback）' },
+        remoteHost: { type: 'string', description: '会话目标主机；提供时按路由选择本地源地址绑定（issue #37）' },
+        remotePort: { type: 'number', description: '会话目标端口，配合 remoteHost' },
       } },
-      handler: (args) => {
+      handler: async (args) => {
         let port = Number(args.port);
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('非法端口: ' + args.port);
         for (const s of state.sockets.values()) if (s.port === port) throw new Error('端口已绑定: ' + port);
         const wantMulticast = !!args.multicast;
         // 普通绑定严格回环；组播是内核强制例外：接收组播必须绑 INADDR_ANY，
         // 但组播接口显式限定回环 127.0.0.1（见 multicast_join），仍不暴露到外网。
-        const bindHost = wantMulticast ? '0.0.0.0' : BOUND_HOST;
+        let bindHost = wantMulticast ? '0.0.0.0' : BOUND_HOST;
+        // 有目标地址的 UDP 会话：绑内核为该路由选择的源地址，才能把报文送到
+        // 非回环目标并收到同端口回包；无目标的直接 udp_bind 仍只绑回环。
+        const remoteHost = args.remoteHost == null ? '' : String(args.remoteHost);
+        const remotePort = Number(args.remotePort) || 0;
+        if (!wantMulticast && remoteHost && remotePort >= 1 && remotePort <= 65535) {
+          try { bindHost = await routeSourceAddress(remoteHost, remotePort); }
+          catch (e) { emitLog('warn', 'UDP 源地址查询失败，回退 127.0.0.1: ' + e.message); }
+        }
         const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
         const id = 'u-' + (++state.sockSeq);
-        const entry = { id, socket, port, host: bindHost, multicast: new Set() };
-        socket.on('close',()=>ctx.onClose?.({socketId:id}));
+        const entry = { id, socket, port, host: bindHost, multicast: new Set(), pending: new Set() };
+        socket.on('close',()=>{ settlePending(entry, new Error(SEND_CLOSED_ERROR)); ctx.onClose?.({socketId:id}); });
         return new Promise((resolve, reject) => {
           socket.on('error', (err) => reject(new Error('绑定失败: ' + (err && err.message))));
           if (wantMulticast) { try { socket.setMulticastLoopback(true); } catch (_) {} }
@@ -117,22 +163,43 @@ module.exports = {
         data: { description: '发送数据；format=hex 时为十六进制串' },
         format: { type: 'string', enum: ['utf8', 'hex'] },
       } },
-      handler: (args) => new Promise((resolve, reject) => {
+      handler: (args) => {
         const host = String(args.host || '127.0.0.1');
         const port = Number(args.port);
         if (!port || port < 1 || port > 65535) throw new Error('非法端口: ' + args.port);
         const buf = encodeData(args.data, args.format);
-        const sock = dgram.createSocket('udp4');
-        const bound=state.sockets.get(String(args.socketId||''));
-        if(args.socketId&&!bound){sock.close?.();return reject(Error('UDP会话不存在'));}
-        (bound?bound.socket:sock).send(buf, port, host, (err) => {
-          try { sock.close(); } catch (_) {}
-          if (err) return reject(new Error('发送失败: ' + (err && err.message)));
-          ctx.emit('traffic', { direction: 'out', remote: host + ':' + port, length: buf.length, payloadTruncated: buf.length > MAX_PREVIEW, time: nowIso() });
-          ctx.onData?.(buf,{socketId:bound?.id,direction:'out',remote:host+':'+port});
-          resolve({ ok: true, host, port, sent: buf.length });
+        const bound = state.sockets.get(String(args.socketId || ''));
+        if (args.socketId && !bound) return Promise.reject(new Error('UDP会话不存在'));
+        if (!bound) {
+          return new Promise((resolve, reject) => {
+            const sock = dgram.createSocket('udp4');
+            const finish = (err) => {
+              try { sock.close(); } catch (_) {}
+              if (err) return reject(err);
+              ctx.emit('traffic', { direction: 'out', remote: host + ':' + port, length: buf.length, payloadTruncated: buf.length > MAX_PREVIEW, time: nowIso() });
+              resolve({ ok: true, host, port, sent: buf.length });
+            };
+            try { sock.send(buf, port, host, (err) => finish(err ? new Error('发送失败: ' + (err && err.message)) : null)); }
+            catch (e) { finish(new Error('发送失败: ' + (e && e.message))); }
+          });
+        }
+        return new Promise((resolve, reject) => {
+          const record = { settled: false, reject };
+          bound.pending.add(record);
+          const finish = (err) => {
+            if (record.settled) return;
+            record.settled = true;
+            bound.pending.delete(record);
+            if (err) return reject(err);
+            ctx.emit('traffic', { direction: 'out', socketId: bound.id, remote: host + ':' + port, length: buf.length, payloadTruncated: buf.length > MAX_PREVIEW, time: nowIso() });
+            ctx.onData?.(buf, { socketId: bound.id, direction: 'out', remote: host + ':' + port });
+            resolve({ ok: true, host, port, sent: buf.length });
+          };
+          // 会话在 send 回调前关闭时由 settlePending 以“未确认”结算，避免悬空 Promise。
+          try { bound.socket.send(buf, port, host, (err) => finish(err ? new Error('发送失败: ' + (err && err.message)) : null)); }
+          catch (e) { finish(new Error('发送失败: ' + (e && e.message))); }
         });
-      }),
+      },
     });
 
     ctx.tool({
@@ -144,11 +211,15 @@ module.exports = {
         if (args.socketId) {
           const e = state.sockets.get(String(args.socketId));
           if (!e) throw new Error('socket 不存在: ' + args.socketId);
+          settlePending(e, new Error(SEND_CLOSED_ERROR));
           try { e.socket.close(); } catch (_) {}
           state.sockets.delete(String(args.socketId));
           closed = 1;
         } else {
-          for (const e of Array.from(state.sockets.values())) { try { e.socket.close(); closed++; } catch (_) {} }
+          for (const e of Array.from(state.sockets.values())) {
+            settlePending(e, new Error(SEND_CLOSED_ERROR));
+            try { e.socket.close(); closed++; } catch (_) {}
+          }
           state.sockets.clear();
         }
         return { ok: true, closed };
@@ -221,7 +292,7 @@ module.exports = {
   stop() {
     const s = this.__state;
     if (!s) return;
-    for (const e of s.sockets.values()) { try { e.socket.close(); } catch (_) {} }
+    for (const e of s.sockets.values()) { settlePending(e, new Error(SEND_CLOSED_ERROR)); try { e.socket.close(); } catch (_) {} }
     s.sockets.clear(); s.simRules.clear();
   },
 };

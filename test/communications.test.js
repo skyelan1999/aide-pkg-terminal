@@ -16,6 +16,41 @@ test('UDP sends and receives from the same bound socket, preserving packet bound
  const {root,m}=fixture(t),peer=dgram.createSocket('udp4');await new Promise(r=>peer.bind(0,'127.0.0.1',r));t.after(()=>peer.close());const sources=[];peer.on('message',(data,remote)=>{sources.push(remote.port);peer.send(data,remote.port,remote.address);});
  const session=(await m.create(root,{kind:'udp',host:'127.0.0.1',port:peer.address().port,bindPort:0})).session;await m.send(root,{id:session.id,data:'000102ff',format:'hex'});await read(m,root,session.id,'RX');assert.deepEqual(sources,[session.bindPort]);const output=Buffer.from(m.poll(root,{id:session.id}).output.data,'base64').toString();assert(output.includes('TX')&&output.includes('00 01 02 ff'));await m.close(root,{id:session.id});assert.equal(m.list(root).sessions[0].status,'exited');
 });
+test('UDP session bound for a reachable non-loopback destination uses the route-selected source address (issue #37)',async t=>{
+ const addr=Object.values(os.networkInterfaces()).flat().find(i=>i&&i.family==='IPv4'&&!i.internal)?.address;
+ if(!addr)return t.skip('no non-loopback IPv4 interface');
+ const {root,m}=fixture(t),comm=m.communication(m.space(root)),peer=dgram.createSocket('udp4');
+ await new Promise(r=>peer.bind(0,addr,r));t.after(()=>peer.close());
+ peer.on('message',(data,remote)=>peer.send(data,remote.port,remote.address));
+ const session=(await m.create(root,{kind:'udp',host:addr,port:peer.address().port,bindPort:0})).session;
+ const entry=[...comm.modules.udp.__state.sockets.values()].find(e=>e.port===session.bindPort);assert.equal(entry.host,addr,'session socket binds the route-selected address, not 127.0.0.1');
+ await m.send(root,{id:session.id,data:'CROSS_HOST'});await read(m,root,session.id,'CROSS_HOST');
+ await m.close(root,{id:session.id});
+});
+test('UDP send settles exactly once when the bound session closes before the dgram callback (issue #36)',async t=>{
+ const {root,m}=fixture(t),comm=m.communication(m.space(root));
+ const bind=await comm.call('udp_bind',{port:0});const entry=[...comm.modules.udp.__state.sockets.values()].find(e=>e.port===bind.port);
+ const realSend=entry.socket.send.bind(entry.socket);
+ // 模拟内核回调尚未到达时并发关闭会话。
+ entry.socket.send=()=>{};
+ const sending=comm.call('udp_send',{socketId:bind.socketId,host:'127.0.0.1',port:9,data:'pending'});
+ await new Promise(r=>setTimeout(r,10));
+ await comm.call('udp_close',{socketId:bind.socketId});
+ await assert.rejects(sending,/未确认|不存在|发送失败/);
+ assert.equal(entry.pending.size,0,'no pending send is left behind');
+ entry.socket.send=realSend;
+});
+test('asynchronously accepted TCP sockets respect the workspace-wide 32-resource cap (issue #12)',async t=>{
+ const {root,m}=fixture(t),comm=m.communication(m.space(root));
+ const target=net.createServer(s=>s.on('data',d=>s.write(d)));await new Promise(r=>target.listen(0,'127.0.0.1',r));t.after(()=>target.close());
+ const probe=net.createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));const listenPort=probe.address().port;await new Promise(r=>probe.close(r));
+ const proxy=await comm.call('tcp_proxy_start',{listenPort,targetHost:'127.0.0.1',targetPort:target.address().port});
+ const clients=[];for(let i=0;i<40;i++){const c=net.connect(proxy.listenPort,'127.0.0.1');c.on('error',()=>{});clients.push(c);}
+ await until(()=>comm.usage()>=32,'proxy accepts reach the shared cap');
+ assert.equal(comm.usage(),32,'one proxy plus 31 registered clients equals the global cap');
+ assert(comm.modules.tcp.__state.connections.size<=31);
+ for(const c of clients)c.destroy();await comm.call('tcp_proxy_stop',{proxyId:proxy.proxyId});
+});
 test('native serial runtime opens virtual ports, applies config, transfers hex/replay and frees handles',async t=>{
  const {root,m}=fixture(t);const pair=await m.commCall(root,{action:'serial_virtual_create'});const left=(await m.create(root,{kind:'serial',devicePath:pair.masterPath,baudRate:115200,flowControl:true})).session;const right=(await m.create(root,{kind:'serial',devicePath:pair.slavePath,baudRate:115200})).session;
  assert.equal(left.baudRate,115200);assert.equal(m.communication(m.space(root)).modules.serial.__state.ports.get(pair.masterPath).port.settings.rtscts,true);await m.send(root,{id:left.id,data:'41 00 ff',format:'hex'});await read(m,root,right.id,'41 00 ff');await m.commCall(root,{action:'serial_replay',arguments:{path:pair.masterPath,frames:[{data:'REPLAY',delay:0}],speed:1}});await read(m,root,right.id,'REPLAY');await m.close(root,{id:left.id});await m.close(root,{id:right.id});await m.commCall(root,{action:'serial_virtual_destroy',arguments:{pairId:pair.pairId}});

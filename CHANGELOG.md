@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.1（开发中，尚未发布）
+
+- 修复内嵌工作台无法发送 TCP/UDP/串口数据（#35）：发送按钮不再依赖 iframe 沙箱中被禁用的表单提交，改为显式 click 驱动并防重复提交；不扩大 iframe 权限。
+- 修复 UDP 会话在发送回调前被并发关闭时，发送 Promise 永不结算的问题（#36）；关闭时以「发送结果未确认」拒绝挂起发送，且只结算一次。
+- 修复 UDP 会话对非回环/桥接目标发送报 EINVAL（#37）：按目标路由选择本地源地址绑定，回环与组播行为不变。
+- 修复 TCP 代理接入不检查工作区全局 32 资源上限（#12）：代理注册的连接计入上限，超限立即关闭。
+- 修复 macOS 上 SFTP 模拟器把自身根目录判为越界（#6）：根目录与目标父目录统一 realpath 规范化，软链逃逸校验语义不变。
+- 新增受管 X display 生命周期（#40 第一阶段）：`terminal_xserver_start/status/stop` 在 Linux 运行环境拉起 Xvfb，每 display 私有 MIT cookie，仅 Unix socket，停止即撤销；窗口呈现与 seamless 多窗口见 `docs/design/xserver-integration.md`（NOT_RUN）。
+
 ## 1.7.0（发行状态以 GitHub Release 为准）
 
 - 工作台按会话保存行号/时间戳设置；启用后仅对新写入的输出日志添加行号和 ISO 时间戳。

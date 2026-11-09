@@ -215,7 +215,23 @@
   $('relay-enabled').onchange=()=>{syncRelay();if($('kind').value==='serial')refreshSerial();};
   $('refresh-serial').onclick=refreshSerial;
   $('send-format').onchange=()=>{$('send-ending').disabled=$('send-format').value==='hex';};
-  $('communication-send').onsubmit=async event=>{event.preventDefault();const rec=current();if(!rec||!communication(rec))return;let data=$('send-data').value;const format=$('send-format').value;if(format==='utf8')data+=({lf:'\n',crlf:'\r\n',cr:'\r'}[$('send-ending').value]||'');$('send-packet').disabled=true;try{await enqueue('input',{id:rec.id,data,format});}catch(error){message('发送结果待核实，不会自动重发。'+error.message);}finally{render();}};
+  // AIDE 的 Workbench iframe 以 allow-scripts allow-downloads 沙箱加载，没有
+  // allow-forms，原生 form 提交事件不会触发（issue #35）。发送改由按钮 click
+  // 显式驱动；submit 处理器保留，作为非沙箱环境与键盘路径的兼容入口。
+  let sendingPacket = false;
+  async function sendPacket() {
+    if (sendingPacket) return;
+    const rec = current(); if (!rec || !communication(rec)) return;
+    let data = $('send-data').value;
+    const format = $('send-format').value;
+    if (format === 'utf8') data += ({lf:'\n',crlf:'\r\n',cr:'\r'}[$('send-ending').value] || '');
+    sendingPacket = true; $('send-packet').disabled = true;
+    try { await enqueue('input', {id:rec.id, data, format}); }
+    catch (error) { message('发送结果待核实，不会自动重发。' + error.message); }
+    finally { sendingPacket = false; render(); }
+  }
+  $('send-packet').onclick = event => { event.preventDefault(); void sendPacket(); };
+  $('communication-send').onsubmit = event => { event.preventDefault(); void sendPacket(); };
   $('create-submit').onclick=async event=>{
     event.preventDefault();const form=$('create-form');if($('kind').value==='serial'&&!$('relay-enabled').checked&&$('serial-port-select').disabled){$('create-error').textContent='请等待串口列表读取完成';return;}if(!form.reportValidity())return;const values=new FormData(form),args={kind:values.get('kind'),name:values.get('name'),cwd:values.get('cwd')||'.',logging:form.elements.logging.checked,visibleToAide:form.elements.visibleToAide.checked};
     if(args.kind==='ssh')Object.assign(args,{host:values.get('host'),port:Number(values.get('port')),username:values.get('username'),auth:values.get('auth'),identityFile:values.get('auth')==='key'?values.get('identityFile')||undefined:undefined,identitySource:values.get('auth')==='key'?values.get('identitySource')||'':undefined});

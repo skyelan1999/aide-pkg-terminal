@@ -299,19 +299,28 @@ function flagsToMode(flags) {
   return 'r'; // CREAT/TRUNC 对只读打开无意义
 }
 
-/* 为模拟服务端挂一个最小可用的 SFTP 子系统，后端为 sftpRoot 目录（仅测试/演练）。 */
-function setupSftp(sftp, sftpRoot) {
-  const handles = new Map(); // handle -> {type:'file'|'dir', value}
-  let nextHandle = 1;
-  sftp.on('close',()=>{for(const rec of handles.values())if(rec.type==='file')try{fs.closeSync(rec.value);}catch(_){}handles.clear();});
-  const root = path.resolve(sftpRoot);
-  const safe = (p) => {
+/* 规范化模拟 SFTP 根目录：macOS 上 /var 与 /private/var 指向同一目录，
+ * 词法 resolve 会把模拟器自己的根误判为越界（issue #6）。 */
+function canonicalSftpRoot(sftpRoot) {
+  return fs.realpathSync(path.resolve(sftpRoot));
+}
+function sftpPathGuard(sftpRoot) {
+  const root = canonicalSftpRoot(sftpRoot);
+  return (p) => {
     const abs = path.normalize(path.join(root, String(p || '.')));
     const parent=fs.existsSync(abs)?fs.realpathSync(abs):fs.realpathSync(path.dirname(abs));
     if(parent!==root&&!parent.startsWith(root+path.sep))throw Error('sftp 路径越界');
     if (abs !== root && !abs.startsWith(root + path.sep)) throw new Error('sftp 路径越界');
     return abs;
   };
+}
+
+/* 为模拟服务端挂一个最小可用的 SFTP 子系统，后端为 sftpRoot 目录（仅测试/演练）。 */
+function setupSftp(sftp, sftpRoot) {
+  const handles = new Map(); // handle -> {type:'file'|'dir', value}
+  let nextHandle = 1;
+  sftp.on('close',()=>{for(const rec of handles.values())if(rec.type==='file')try{fs.closeSync(rec.value);}catch(_){}handles.clear();});
+  const safe = sftpPathGuard(sftpRoot);
   sftp.on('OPEN', (reqid, filename, flags) => {
     if(handles.size>=64)return sftp.status(reqid,STATUS_FAILURE,'too many handles');
     let fd;
@@ -661,3 +670,6 @@ module.exports = {
     simulateServers.clear();
   },
 };
+
+// 供回归测试直接验证 SFTP 根目录规范化（issue #6）。
+module.exports.__test = { sftpPathGuard, canonicalSftpRoot };

@@ -10,6 +10,7 @@ const relay=require('./relay/client');
 const net=require('node:net');
 const {Telnet}=require('./telnet');
 const {prepareX11}=require('./x11');
+const {XServers}=require('./xserver');
 const {Communications,data:communicationData}=require('./communications');
 const COMM_KINDS=['tcp','tcp-server','udp','serial'];
 const ID = /^[a-f0-9]{24}$/;
@@ -46,7 +47,7 @@ function inside(root, relative, directory = true) {
   return real;
 }
 class Sessions {
-  constructor() { this.spaces = new Map(); this.stopping = false; }
+  constructor() { this.spaces = new Map(); this.stopping = false; this.xservers = new XServers(); }
   space(workspace) {
     const context = typeof workspace === 'object' && workspace ? workspace : null;
     workspace = context ? context.storageRoot : workspace;
@@ -435,7 +436,7 @@ class Sessions {
     }
     if(rec.kind==='tcp'){result=await comm.call('tcp_connect',{host:rec.host,port:rec.port});rec.connectionRole='client';}
     if(rec.kind==='tcp-server'){result=await comm.call('tcp_listen',{port:rec.port});rec.port=result.port;rec.host=result.host;}
-    if(rec.kind==='udp'){rec.bindPort=integer(args.bindPort,0,0,65535);rec.multicast=!!args.multicast;result=await comm.call('udp_bind',{port:rec.bindPort,multicast:rec.multicast});rec.bindPort=result.port;}
+    if(rec.kind==='udp'){rec.bindPort=integer(args.bindPort,0,0,65535);rec.multicast=!!args.multicast;result=await comm.call('udp_bind',{port:rec.bindPort,multicast:rec.multicast,remoteHost:rec.host,remotePort:rec.port});rec.bindPort=result.port;rec.bindHost=result.host;}
     if(rec.kind==='serial'){
       rec.devicePath=text(args.devicePath,'',512);rec.baudRate=integer(args.baudRate,115200,1,4000000);rec.dataBits=integer(args.dataBits,8,5,8);rec.stopBits=Number(args.stopBits??1);rec.parity=args.parity||'none';rec.flowControl=!!args.flowControl;
       if(![1,1.5,2].includes(rec.stopBits)||!['none','even','odd','mark','space'].includes(rec.parity))throw Error('串口参数无效');
@@ -622,8 +623,12 @@ class Sessions {
     fs.rmSync(path.join(space.dir,rec.id+'.json')); space.records.delete(rec.id);space.resources?.delete(rec.resource);
     return {deleted:true};
   }
+  async xserverStart(_workspace, args = {}) { return this.xservers.start(args); }
+  xserverStatus() { return { servers: this.xservers.list() }; }
+  async xserverStop(_workspace, args = {}) { return this.xservers.stop(args.serverId); }
   async stop() {
     this.stopping=true;
+    await this.xservers.stopAll();
     await Promise.allSettled([...this.spaces.values()].flatMap(space=>[...space.records.values()].filter(rec=>rec.worker).map(rec=>this.closeRecord(space,rec))));
     for(const space of this.spaces.values()){await space.communications?.close();for(const rec of space.records.values())if(rec.transport&&rec.worker){rec.worker=null;rec.status='exited';rec.endedAt=new Date().toISOString();try{this.persist(space,rec);}catch(_){}}}
   }
