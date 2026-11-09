@@ -38,6 +38,9 @@ module.exports = {
     add('terminal_session_comm','调用当前工作区内的通信工具；连接、发送、回放、代理和模拟服务仅在用户明确授权时调用',run('commCall'),{action:{type:'string',enum:[...definitions.map(d=>d.name.replace(/^terminal_/,'')),'ssh_fingerprint','session_logging','session_display','session_configure','session_read','session_visibility']},arguments:{type:'object'}} ,['action']);
     for(const definition of definitions){const action=definition.name.replace(/^terminal_/,'');ctx.tool({...definition,handler:(args,api)=>run('commCall')({action,arguments:args},api)});}
     add('terminal_ssh_fingerprint','只读获取SSH主机指纹，须用户通过可信途径核验后才能用于连接',(args,api)=>run('commCall')({action:'ssh_fingerprint',arguments:args},api),{host:{type:'string'},port:{type:'integer'},username:{type:'string'}},['host']);
+    add('terminal_xserver_start','在 Aide 运行环境内启动受管 Xvfb display 并生成私有 MIT cookie；仅 Unix socket，不监听 TCP；不会安装或修改系统 X Server',run('xserverStart'),{display:{type:'string'},width:{type:'integer'},height:{type:'integer'},depth:{type:'integer'}});
+    add('terminal_xserver_status','列出受管 X display 的状态；不返回 cookie 内容',run('xserverStatus'));
+    add('terminal_xserver_stop','停止受管 X display 并立即删除其 Xauthority cookie；不传 serverId 时停止全部',run('xserverStop'),{serverId:{type:'string'}});
     ctx.slot({id:'terminal-panel',name:'设备终端工作台'});ctx.provide('terminal');
   },
   async stop() { if (sessions) await sessions.stop(); },
