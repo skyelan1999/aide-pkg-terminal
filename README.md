@@ -159,6 +159,7 @@ Shell/SSH 命令、设备收发与日志仍沿用原会话机制；中继在线�
 ## 1.8.0：MobaXterm 式开箱即用图形窗口（issue #42）
 
 新建 SSH 会话默认启用图形转发，无需安装 XQuartz/Xorg、无需填写 DISPLAY/Xauthority。插件在 Aide 运行环境内自动分配受管 Xvfb display、生成 0600 临时 Xauthority，并附带 openbox 窗口管理器、仅监听 127.0.0.1 的 x11vnc 与 websockify；会话重连时重建 display，结束后回收进程与 cookie。宿主按插件声明的 `workbench.viewer.protocol=1` 签发一次性 viewer 票据，并把同源 `/plugin-viewer/<ticket>/websockify` 反向代理到 loopback；CSP 只把 `connect-src` 钉到当前宿主确切 origin，沙箱保持 `allow-scripts allow-downloads` 且无 `allow-same-origin`。Workbench 内联 noVNC 1.4，支持 `scaleViewport` 缩放；远程剪贴板到达时提供“复制远程剪贴板”按钮（浏览器沙箱禁止无手势写剪贴板，点击后经用户手势写入），画布内 Ctrl+V 通过 paste 事件回填远端。图形窗口在独立面板打开，SSH 会话首次进入运行态时自动连接，终端与图形可分别关闭。
+同一版本把工具栏“终端设置”升级为逐会话全参数面板：名称、可见性、日志、行号/时间戳，SSH 的主机/端口/用户名/认证/私钥/X11，Telnet 终端类型与本地回显，TCP/UDP 目标与本地端口/组播，串口设备与波特率/数据位/停止位/校验/流控，起始目录以及中继地址/端口/密钥都可按当前会话修改；只提交实际变化的字段，连接类参数提示“重新连接后生效”，并提供“保存并重连”。
 
 验收：Docker Linux 套件 67/67；隔离 AIDE 容器中经真实 Workbench bridge 连接真实 sshd，自动分配 display :90、x11vnc/websockify 仅 loopback、noVNC 连接成功并显示通过 X11 转发启动的 xterm 窗口，截图见 `docs/verification/terminal-1.8.0-graphics.png`。远程剪贴板为按钮触发的用户手势复制（浏览器沙箱不允许无手势自动写剪贴板）；不同 DPI/缩放屏幕矩阵尚未做端到端断言。
 

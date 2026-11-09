@@ -250,17 +250,17 @@
   $('cancel-create').onclick=()=>$('create-dialog').close();
   $('create-dialog').addEventListener('close',()=>{$('create-form').elements.relayKey.value='';});
   $('auth').onchange=()=>{$('identity-fields').hidden=$('auth').value!=='key';};
-  let keySource='', keyDirectory='.';
+  let keySource='', keyDirectory='.', keyPickerTarget='create';
   async function loadKeys(source='',directory='.') {
     $('key-error').textContent='';$('key-files').replaceChildren();$('key-up').disabled=true;
     try {const result=await enqueue('files',{identitySource:source,path:directory});keySource=result.source;keyDirectory=result.path;
-      for(const id of ['key-source','identity-source']){const select=$(id), previous=select.value;select.replaceChildren();for(const source of result.sources){const option=document.createElement('option');option.value=source.id;option.textContent=source.name;select.append(option);}select.value=id==='key-source'?keySource:previous;}
+      for(const id of ['key-source','identity-source','set-identity-source']){const select=$(id), previous=select.value;select.replaceChildren();for(const source of result.sources){const option=document.createElement('option');option.value=source.id;option.textContent=source.name;select.append(option);}select.value=id==='key-source'?keySource:previous;}
       $('key-path').textContent=keyDirectory;$('key-up').disabled=keyDirectory==='.';
-      for(const file of result.entries){const button=document.createElement('button');button.type='button';button.textContent=(file.dir?'▸ ':'')+file.name;button.onclick=()=>{if(file.dir){loadKeys(keySource,file.path);return;}$('create-form').elements.identityFile.value=file.path;$('identity-source').value=keySource;$('identity-dialog').close();};$('key-files').append(button);}
+      for(const file of result.entries){const button=document.createElement('button');button.type='button';button.textContent=(file.dir?'▸ ':'')+file.name;button.onclick=()=>{if(file.dir){loadKeys(keySource,file.path);return;}if(keyPickerTarget==='settings'){$('set-identity-file').value=file.path;$('set-identity-source').value=keySource;}else{$('create-form').elements.identityFile.value=file.path;$('identity-source').value=keySource;}$('identity-dialog').close();};$('key-files').append(button);}
       if(!result.entries.length)$('key-files').textContent='此目录为空';
     }catch(error){$('key-error').textContent=error.message;}
   }
-  $('browse-identity').onclick=()=>{$('identity-dialog').showModal();loadKeys($('identity-source').value,'.');};
+  $('browse-identity').onclick=()=>{keyPickerTarget='create';$('identity-dialog').showModal();loadKeys($('identity-source').value,'.');};
   $('key-source').onchange=()=>loadKeys($('key-source').value,'.');
   $('key-up').onclick=()=>loadKeys(keySource,keyDirectory.includes('/')?keyDirectory.slice(0,keyDirectory.lastIndexOf('/')):'.');
   $('key-cancel').onclick=()=>$('identity-dialog').close();
@@ -343,9 +343,86 @@
   $('relay-connect').onclick=async()=>{const rec=current();if(!rec?.relayEnabled||relayConnecting)return;relayConnecting=true;$('relay-connect').disabled=true;try{const result=await enqueue('relay_connect',{id:rec.id,identityFile:rec.identityFile,identitySource:rec.identitySource});Object.assign(rec,result.session);select(rec.id);}catch(error){message('中继连接失败：'+error.message);}finally{relayConnecting=false;render();}};
   $('relay-script').onclick=async()=>{const rec=current();if(!rec?.relayEnabled)return;try{const result=await enqueue('relay_script',{id:rec.id});const output=bytes(result.data);window.parent.postMessage({type:'aide.workbench.export',protocol:1,pluginId:'terminal',requestId:'export_'+(++exportId),name:result.name,bytes:output.buffer},'*',[output.buffer]);}catch(error){fail(error);}};
   setInterval(()=>{if(current()?.relayEnabled&&!sessionReconnecting&&!relayConnecting&&!sessions.some(rec=>rec.status==='running')&&!paused&&!$('relay-probe').disabled)$('relay-probe').click();},15000);
-  $('display-settings').onclick=()=>{const rec=current();if(!rec)return;applyDisplayPrefs(rec.id);$('display-dialog').showModal();};
-  $('close-display').onclick=()=>$('display-dialog').close();
-  for(const [id,key] of [['show-line-numbers','lineNumbers'],['show-timestamps','timestamps']])$(id).onchange=async()=>{const rec=current();if(!rec)return;const prefs=prefsFor(rec.id);prefs[key]=$(id).checked;applyDisplayPrefs(rec.id);fitSelected();try{const result=await enqueue('display',{id:rec.id,lineNumbers:prefs.lineNumbers,timestamps:prefs.timestamps});Object.assign(rec,result.session);try{localStorage.setItem('aide.terminal.display.'+rec.id,JSON.stringify(prefs));}catch(_){}render();}catch(error){prefs[key]=!$(id).checked;applyDisplayPrefs(rec.id);fitSelected();fail(error);}};
+  function endpointParts(value) {
+    const text=String(value||''), index=text.lastIndexOf(':');
+    if(index<=0)return {host:'',port:17780};
+    const port=Number(text.slice(index+1));
+    return {host:text.slice(0,index),port:Number.isInteger(port)&&port>0?port:17780};
+  }
+  function settingsShow(rec) {
+    const kind=rec.kind, incoming=kind==='tcp'&&rec.connectionRole!=='client';
+    const show=(id,visible)=>$(id).hidden=!visible;
+    show('set-network',['ssh','telnet','tcp','udp','tcp-server'].includes(kind)&&!incoming);
+    show('set-ssh',kind==='ssh');show('set-telnet',kind==='telnet');show('set-udp',kind==='udp');show('set-serial',kind==='serial');
+    show('set-cwd',['local','workspace','ssh'].includes(kind));
+    show('set-relay',['ssh','telnet','tcp','udp','serial'].includes(kind)&&!incoming);
+    $('set-host-label').hidden=kind==='tcp-server';$('set-port-text').textContent=kind==='tcp-server'?'监听端口':'端口';
+  }
+  function openSettings() {
+    const rec=current();if(!rec)return;
+    settingsShow(rec);$('set-error').textContent='';
+    const value=(id,v)=>$(id).value=v===undefined||v===null?'':String(v);
+    value('set-name',rec.name);$('set-visible').checked=rec.visibleToAide!==false;$('set-logging').checked=rec.logging!==false;
+    applyDisplayPrefs(rec.id);
+    value('set-host',rec.host);value('set-port',rec.port);value('set-username',rec.username);$('set-auth').value=rec.auth||'default';
+    value('set-identity-source',rec.identitySource);value('set-identity-file',rec.identityFile);$('set-identity').hidden=$('set-auth').value!=='key';
+    $('set-x11').checked=!!rec.x11Enabled;$('set-x11-fields').hidden=!rec.x11Enabled;value('set-x11-display',rec.x11Display);value('set-x11-authority',rec.x11AuthorityFile);
+    value('set-terminal-type',rec.terminalType||'xterm-256color');$('set-telnet-echo').checked=!!rec.telnetLocalEcho;
+    value('set-bind-port',rec.bindPort||0);$('set-multicast').checked=!!rec.multicast;
+    value('set-device-path',rec.devicePath);value('set-baud',rec.baudRate||115200);$('set-data-bits').value=String(rec.dataBits||8);$('set-stop-bits').value=String(rec.stopBits||1);$('set-parity').value=rec.parity||'none';$('set-flow').checked=!!rec.flowControl;
+    value('set-cwd-input',rec.cwd||'.');
+    const relay=endpointParts(rec.relayEndpoint);$('set-relay-enabled').checked=!!rec.relayEnabled;value('set-relay-host',relay.host);value('set-relay-port',relay.port);value('set-relay-key','');$('set-relay-fields').hidden=!rec.relayEnabled;
+    $('settings-dialog').showModal();
+    if(rec.kind==='ssh')loadKeys(rec.identitySource||'', '.').then(()=>{$('set-identity-source').value=rec.identitySource||'';}).catch(()=>{});
+  }
+  async function saveSettings(reconnect) {
+    const rec=current();if(!rec)return;
+    const args={id:rec.id},errors=[];
+    const textChange=(id,key)=>{const v=$(id).value.trim();if(v!==String(rec[key]||''))args[key]=v;};
+    const boolChange=(id,key)=>{if($(id).checked!==!!rec[key])args[key]=$(id).checked;};
+    const numChange=(id,key)=>{const n=Number($(id).value);if(n!==Number(rec[key]||0))args[key]=n;};
+    const name=$('set-name').value.trim();if(!name)errors.push('会话名称不能为空');else if(name!==rec.name)args.name=name;
+    boolChange('set-visible','visibleToAide');boolChange('set-logging','logging');
+    const lineNumbers=$('show-line-numbers').checked,timestamps=$('show-timestamps').checked,prefs=prefsFor(rec.id);
+    if(lineNumbers!==prefs.lineNumbers||timestamps!==prefs.timestamps){args.displayLineNumbers=lineNumbers;args.displayTimestamps=timestamps;}
+    if(!$('set-network').hidden){if(!$('set-host-label').hidden)textChange('set-host','host');numChange('set-port','port');}
+    if(rec.kind==='ssh'){
+      textChange('set-username','username');const auth=$('set-auth').value;if(auth!==(rec.auth||'default'))args.auth=auth;
+      if(auth==='key'){textChange('set-identity-source','identitySource');textChange('set-identity-file','identityFile');if(!$('set-identity-file').value.trim())errors.push('私钥认证需要填写私钥文件');}
+      if($('set-x11').checked!==!!rec.x11Enabled)args.x11Enabled=$('set-x11').checked;
+      if($('set-x11').checked){const display=$('set-x11-display').value.trim(),authority=$('set-x11-authority').value.trim();if(display!==String(rec.x11Display||''))args.x11Display=display;if(authority!==String(rec.x11AuthorityFile||''))args.x11AuthorityFile=authority;}
+    }
+    if(rec.kind==='telnet'){textChange('set-terminal-type','terminalType');boolChange('set-telnet-echo','telnetLocalEcho');}
+    if(rec.kind==='udp'){numChange('set-bind-port','bindPort');boolChange('set-multicast','multicast');}
+    if(rec.kind==='serial'){textChange('set-device-path','devicePath');numChange('set-baud','baudRate');const bits=Number($('set-data-bits').value),stop=Number($('set-stop-bits').value),parity=$('set-parity').value;if(bits!==Number(rec.dataBits||8))args.dataBits=bits;if(stop!==Number(rec.stopBits||1))args.stopBits=stop;if(parity!==(rec.parity||'none'))args.parity=parity;boolChange('set-flow','flowControl');}
+    if(!$('set-cwd').hidden)textChange('set-cwd-input','cwd');
+    if(!$('set-relay').hidden){
+      const enabled=$('set-relay-enabled').checked,old=endpointParts(rec.relayEndpoint),host=$('set-relay-host').value.trim(),port=Number($('set-relay-port').value||17780),key=$('set-relay-key').value.trim();
+      const changed=enabled!==!!rec.relayEnabled||(enabled&&(host!==old.host||port!==old.port||key));
+      if(changed){if(enabled&&!host)errors.push('启用中继需要填写中继地址');args.relay={enabled};if(enabled){args.relay.host=host;args.relay.port=port;if(key)args.relay.key=key;}}
+    }
+    if(errors.length){$('set-error').textContent=errors[0];return;}
+    if(Object.keys(args).length===1){$('settings-dialog').close();message('没有需要保存的改动');return;}
+    const save=$('settings-save'),again=$('settings-reconnect');save.disabled=true;again.disabled=true;$('set-error').textContent='';
+    try {
+      const result=await enqueue('configure',args);Object.assign(rec,result.session);
+      if(args.displayLineNumbers!==undefined){prefs.lineNumbers=args.displayLineNumbers;prefs.timestamps=args.displayTimestamps;applyDisplayPrefs(rec.id);fitSelected();try{localStorage.setItem('aide.terminal.display.'+rec.id,JSON.stringify(prefs));}catch(_){ }}
+      $('settings-dialog').close();
+      if(reconnect){await enqueue('relay_connect',{id:rec.id});message('设置已保存，正在重新连接…');}
+      else message(result.requiresReconnect?'设置已保存；重新连接后生效':'设置已保存');
+      render();
+    } catch(error) {if($('settings-dialog').open)$('set-error').textContent=error.message;else fail(error);}
+    finally {save.disabled=false;again.disabled=false;}
+  }
+  $('display-settings').onclick=openSettings;
+  $('settings-cancel').onclick=()=>$('settings-dialog').close();
+  $('settings-form').onsubmit=event=>{event.preventDefault();saveSettings(false);};
+  $('settings-save').onclick=()=>saveSettings(false);
+  $('settings-reconnect').onclick=()=>saveSettings(true);
+  $('set-auth').onchange=()=>{$('set-identity').hidden=$('set-auth').value!=='key';};
+  $('set-x11').onchange=()=>{$('set-x11-fields').hidden=!$('set-x11').checked;};
+  $('set-relay-enabled').onchange=()=>{$('set-relay-fields').hidden=!$('set-relay-enabled').checked;};
+  $('set-browse-identity').onclick=()=>{keyPickerTarget='settings';$('identity-dialog').showModal();loadKeys($('set-identity-source').value,'.');};
   $('logging').onclick=async()=>{const rec=current();if(!rec)return;try{const result=await enqueue('logging',{id:rec.id,enabled:!rec.logging});Object.assign(rec,result.session);render();}catch(error){fail(error);}};
   $('find').onclick=()=>{$('search-bar').hidden=false;$('search-input').focus();fitSelected();};
   $('search-close').onclick=()=>{$('search-bar').hidden=true;panes.get(selected)?.search.clearDecorations();fitSelected();};

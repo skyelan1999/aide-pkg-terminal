@@ -21,9 +21,12 @@
       "graphical pane opens automatically when the SSH session starts",
       "noVNC connected through the host one-use viewer ticket proxy",
       "xterm launched inside the forwarded display and rendered into the workbench canvas",
-      "one-click copy from sandboxed workbench reached the host clipboard (execCommand fallback)"
+      "one-click copy from sandboxed workbench reached the host clipboard (execCommand fallback)",
+      "per-session settings dialog exposes all SSH connection, identity, X11 and relay fields",
+      "session name and display preferences persist through terminal_session_configure",
+      "settings dialog restores values when reopened and leaves no page errors"
     ],
-    "evidence": "docs/verification/terminal-1.8.0-graphics.png",
+    "evidence": "docs/verification/terminal-1.8.0-graphics.png; docs/verification/terminal-1.8.0-settings.png",
     "errors": []
   },
   "not_run": [
