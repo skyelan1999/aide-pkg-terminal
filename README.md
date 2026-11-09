@@ -1,10 +1,10 @@
 # Terminal · Aide 设备终端工作台
 
-**1.7.0；实际发行状态以 GitHub Release 为准。** 要求配套 Aide **v0.1.18.0-RC2 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**1.7.1；实际发行状态以 GitHub Release 为准。** 要求配套 Aide **v0.1.18.0-RC2 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
 
 ## 安装与兼容
 
-以 [v1.7.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.7.0) 是否公开为发行状态依据。正式归档位于 `packages/v1.7.0/aide-pkg-terminal-v1.7.0.zip` 和同目录 `SHA256SUMS`；发布后从 Release 说明的固定提交链接下载，校验 `sha256sum -c SHA256SUMS` 后导入。仅出现仓库文件或本段说明不表示已公开发行。
+以 [v1.7.1 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.7.1) 是否公开为发行状态依据。正式归档位于 `packages/v1.7.1/aide-pkg-terminal-v1.7.1.zip` 和同目录 `SHA256SUMS`；发布后从 Release 说明的固定提交链接下载，校验 `sha256sum -c SHA256SUMS` 后导入。仅出现仓库文件或本段说明不表示已公开发行。
 
 需要 **Aide v0.1.18.0-RC2+**。市场元数据最低版本为 `0.1.18.0 RC2`，不提供降低门槛的 sourceCompatibility；旧 RC1 不应自动升级至此版本。手动 ZIP 导入不经过市场门槛，请先升级宿主。运行时 `sessionCopyVersion=1` 仍作复制入口二次检查。归档不打包 xauth/X Server，部署前提见下方说明。历史1.5.3归档保持不变。
 
@@ -105,7 +105,7 @@ node test/browser-layout.cjs
 
 ## 已发布旧版
 
-[1.0.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.0.0) 和 `packages/v1.0.0/` 中的归档保持不变。1.0.0 仅提供命令提案与目录工具，没有本工作台能力。[插件市场](https://skyelan1999.github.io/aide-pkg-shop/) 当前正式版本为 1.7.0，要求 `terminal-workbench-v1` 能力以及 Aide v0.1.18.0-RC2+；旧宿主会显示不兼容。历史 1.0.0 安装包仍保留。
+[1.0.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.0.0) 和 `packages/v1.0.0/` 中的归档保持不变。1.0.0 仅提供命令提案与目录工具，没有本工作台能力。[插件市场](https://skyelan1999.github.io/aide-pkg-shop/) 当前正式版本为 1.7.1，要求 `terminal-workbench-v1` 能力以及 Aide v0.1.18.0-RC2+；旧宿主会显示不兼容。历史 1.0.0 安装包仍保留。
 
 ## 1.4.2 串口连接与选择修复
 
@@ -155,6 +155,10 @@ Shell/SSH 命令、设备收发与日志仍沿用原会话机制；中继在线�
 ## 1.5.3：TCP 代理背压（Aide #588）
 
 双向 pipe 随接收端的 drain 暂停/恢复来源，保留半关闭，错误或关闭时清理两端；连接数超额时先拒绝再建后端。真实慢接收端回归在两个方向各发送 32 MiB，验证拥塞时来源暂停、队列受控和恢复后的长度/SHA256 一致。该观测不是所有 OS 的固定队列上限。保留 1.5.2 输入调度修复；安装/升级会结束现有设备连接，不自动重放输入。
+
+## 1.7.1：发送可靠性、UDP 与容量修复
+
+修复内嵌工作台发送按钮在 iframe 沙箱内不触发（#35）；UDP 发送未回调时关闭会话会挂起请求（#36）；UDP 对非回环目标的源地址绑定错误（#37）；TCP 代理绕过 32 个通信资源上限（#12）；macOS 上 SFTP 模拟根目录被 realpath 误判越界（#6）。新增受管 Xvfb display 生命周期（`terminal_xserver_start/status/stop`，仅 Unix socket、每 display 私有 cookie、停止即撤销）；Workbench iframe CSP 下的窗口呈现与剪贴板仍是 NOT_RUN，见 `docs/design/xserver-integration.md`。
 
 ## 1.7.0：可配置会话与有界日志读取
 
