@@ -12,6 +12,7 @@ parser.add_argument('--release', action='store_true', help='also prepare package
 args = parser.parse_args()
 manifest = json.loads((root / 'manifest.json').read_text())
 names = ['index.js', 'sessions.js', 'telnet.js', 'x11.js', 'xserver.js', 'pty-worker.py', 'manifest.json', 'workbench.html', 'README.md', 'LICENSE']
+names += ['vendor/novnc.js']
 names += ['package.json', 'relay/client.js', 'relay/agent.py']
 names += [str(p.relative_to(root)) for p in (root/'communications').glob('*.js')]
 names += [str(p.relative_to(root)) for p in (root / 'vendor').glob('*-LICENSE')]

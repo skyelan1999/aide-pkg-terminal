@@ -83,8 +83,9 @@ class Sessions {
     return space;
   }
   public(rec) {
-    const {copiedFrom,x11Enabled=false,x11Display,x11AuthorityFile,terminalType,telnetLocalEcho=false,connectionRole,multicast,visibleToAide=true,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError} = rec;
-    return {copiedFrom,x11Enabled,x11Display,x11AuthorityFile,terminalType,telnetLocalEcho,copyable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',copyConnectable:!['serial','tcp-server'].includes(rec.kind),connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError,displayLineNumbers:rec.displayLineNumbers===true,displayTimestamps:rec.displayTimestamps===true,displaySettingsVersion:rec.displaySettingsVersion||0};
+    const {copiedFrom,x11Enabled=false,x11Display,x11AuthorityFile,x11ViewerPort,x11ManagedServerId,x11Unavailable,terminalType,telnetLocalEcho=false,connectionRole,multicast,visibleToAide=true,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError} = rec;
+    const liveViewer=x11ManagedServerId?this.xservers.list().find(server=>server.serverId===x11ManagedServerId)?.viewer:null;
+    return {copiedFrom,x11Enabled,x11Display,x11AuthorityFile,x11ViewerPort:liveViewer?.wsPort||x11ViewerPort,x11ManagedServerId,x11Unavailable,terminalType,telnetLocalEcho,copyable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',copyConnectable:!['serial','tcp-server'].includes(rec.kind),connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError,displayLineNumbers:rec.displayLineNumbers===true,displayTimestamps:rec.displayTimestamps===true,displaySettingsVersion:rec.displaySettingsVersion||0};
   }
   persist(space, rec) {
     const temporary = path.join(space.dir, rec.id + '.json.tmp');
@@ -169,8 +170,19 @@ class Sessions {
       argv=['ssh','-F','/dev/null','-tt','-S',remote.socket,'-o','ControlMaster=no','-o','BatchMode=yes','-o','ProxyCommand=/bin/false','-o','EscapeChar=none','-p',String(remote.port||22),'-l',remote.username,remote.host,"cd -- "+quote(directory)+" && exec /bin/bash --noprofile --norc -i"];
     }
     let identityMaterial;
+    let managedX11;
+    if (kind === 'ssh' && args.x11Enabled && !args.x11Display) {
+      try {
+        managedX11 = await this.xservers.start({ width: args.x11Width, height: args.x11Height, viewer: true });
+        args = { ...args, x11Display: managedX11.display, managedX11Authority: this.xservers.authorityFile(managedX11.serverId), managedX11ServerId: managedX11.serverId };
+      } catch (error) {
+        // Older Aide runtimes may not ship Xvfb; keep the SSH session usable
+        // and surface the missing graphical capability instead of blocking login.
+        args = { ...args, x11Enabled: false, x11Unavailable: error.message };
+      }
+    }
     const x11=prepareX11({...args,kind},space.root);
-    if(kind==='ssh'){rec.x11Enabled=!!args.x11Enabled;rec.x11Display=args.x11Display;rec.x11AuthorityFile=args.x11AuthorityFile;}
+    if(kind==='ssh'){rec.x11Enabled=!!args.x11Enabled;rec.x11Display=args.x11Display;rec.x11AuthorityFile=args.x11AuthorityFile||args.managedX11Authority;rec.x11ManagedServerId=args.managedX11ServerId;rec.x11ViewerPort=managedX11?.viewer?.wsPort;if(managedX11)rec.x11Managed=true;if(args.x11Unavailable)rec.x11Unavailable=args.x11Unavailable;}
     if (kind === 'ssh') {
       rec.host = text(args.host, '', 253);
       if (!/^[a-zA-Z0-9][a-zA-Z0-9.:%_-]*$/.test(rec.host) && !/^[a-fA-F0-9:]+$/.test(rec.host)) throw Error('SSH 主机名无效');
@@ -183,7 +195,7 @@ class Sessions {
       argv = ['ssh','-F','/dev/null','-tt','-p',String(rec.port),'-l',rec.username,
         '-o','StrictHostKeyChecking=ask','-o','UserKnownHostsFile='+known,'-o','GlobalKnownHostsFile=/dev/null',
         '-o','ServerAliveInterval=30','-o','ServerAliveCountMax=3','-o','ConnectTimeout=15','-o','IdentitiesOnly=yes',
-        '-o','EscapeChar=none','-o','ForwardAgent=no','-o','ClearAllForwardings=yes'];
+        '-o','EscapeChar=none','-o','ForwardAgent=no',...(args.x11Enabled?[]:['-o','ClearAllForwardings=yes'])];
       rec.auth = args.auth || 'default';
       if (!['default','password','key'].includes(rec.auth)) throw Error('认证方式无效');
       if (rec.auth === 'password') argv.push('-o','PubkeyAuthentication=no','-o','PreferredAuthentications=password,keyboard-interactive');
@@ -332,6 +344,7 @@ class Sessions {
     if(rec.worker||rec.reconnecting||rec.relayConnecting)throw Error('会话已经连接或正在连接');
     if(!this.public(rec).reconnectable)throw Error('TCP 接入会话不能主动重连，请重新启动对应监听并等待设备接入；旧版未记录方向的 TCP 会话请新建客户端');
     const stored=this.public(rec);
+    if(rec.x11Managed){delete stored.x11Display;delete stored.x11AuthorityFile;delete stored.x11ManagedServerId;delete stored.x11ViewerPort;}
     space.resources?.delete(rec.resource);rec.transport=null;
     rec.reconnecting=true;rec.status='starting';delete rec.endedAt;delete rec.exitCode;
     try {
@@ -510,6 +523,10 @@ class Sessions {
     return this.closeRecord(space,rec);
   }
   async closeRecord(space,rec) {
+    if(rec.x11ManagedServerId){
+      await this.xservers.stop(rec.x11ManagedServerId).catch(()=>{});
+      delete rec.x11ManagedServerId; delete rec.x11ViewerPort;
+    }
     if(rec.transport){await rec.transport.close();rec.worker=null;rec.status='exited';rec.endedAt=new Date().toISOString();this.persist(space,rec);return {session:this.public(rec)};}
     const worker = rec.worker;
     if (worker) {

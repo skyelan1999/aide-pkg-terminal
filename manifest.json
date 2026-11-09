@@ -2,7 +2,7 @@
   "id": "terminal",
   "name": "设备终端",
   "description": "常驻本地/SSH 设备调试工作台、独立会话与轮转日志",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "author": "aide",
   "main": "index.js",
   "enabled": true,
@@ -18,6 +18,9 @@
     "protocol": 1,
     "entry": "workbench.html",
     "title": "设备终端工作台",
+    "viewer": {
+      "protocol": 1
+    },
     "tools": [
       "terminal_session_list",
       "terminal_session_create",

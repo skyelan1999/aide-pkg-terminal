@@ -1,16 +1,16 @@
-# 集成式 X Server 方案与第一阶段实现（issue #40）
+# 集成式 X Server 方案与图形窗口实现（issue #40 / #42）
 
-状态：第一阶段已实现（受管 X display 生命周期）；窗口呈现与 seamless 多窗口未实现，按 NOT_RUN 记录。
+状态：第二阶段已实现。宿主新增一次性 viewer ticket 与同源 WebSocket 反向代理，插件自动附带 openbox + x11vnc + websockify，并在 Workbench 内用内联 noVNC 呈现窗口；剪贴板双向桥与浏览器缩放（scaleViewport）已接线。seamless 独立原生窗口仍不在本方案范围。
 更新时间：2026-11-09
 
 ## 1. 结论先行
 
 | 问题 | 结论 |
 | --- | --- |
-| 是否在 Workbench iframe 内嵌 noVNC/Xpra viewer | **否**。AIDE 插件 Workbench iframe CSP 为 `connect-src 'none'`、`frame-src 'none'`，任何 viewer 都需要改宿主 CSP；issue 正文已禁止在无安全评审时改动。且纯 framebuffer noVNC 不能支撑 seamless 多窗口的宣称。 |
+| 是否在 Workbench iframe 内嵌 noVNC viewer | **是（已实现）**。插件声明 `workbench.viewer.protocol=1` 后，宿主仅对该插件把 `connect-src` 从 `'none'` 放宽为当前宿主确切 origin 的 http/ws/wss，剪贴板权限保持关闭（沙箱无同源来源，权限无法生效；远程复制改用用户点击的一次性按钮）；仍保持 `frame-src 'none'`、`sandbox allow-scripts allow-downloads`，viewer 不持 AIDE token。 |
 | 第一阶段做什么 | 插件在 Aide 运行环境内受管地拉起/回收 Xvfb display，生成每 display 唯一的 `MIT-MAGIC-COOKIE-1` Xauthority，供后续 SSH X11 转发或后续 viewer 使用。零宿主改动、零系统安装。 |
 | 是否已宣称 seamless 多窗口 | **否**，也不在文档/UI 中暗示。 |
-| 是否需要 aide 宿主改动 | 窗口呈现需要。按用户既定约束，宿主侧方案先出文档、经确认后再动。 |
+| 是否需要 aide 宿主改动 | 需要，且已在用户授权后完成：viewer 能力声明、一次性票据、同源 WS 代理、受控 CSP 放宽。 |
 
 ## 2. 支持的 OS 组合（明确声明）
 
@@ -31,7 +31,7 @@
 
 模块 `xserver.js`（`XServers`）：
 
-- `start({display?, width?, height?, depth?})`：分配 `:90`–`:129` 空闲 display；在 0700 私有临时目录写 `Xauthority`（0600，cookie 32 hex，经 `xauth add` 写入）；以 `Xvfb -auth <file> -nolisten tcp -screen 0 WxHxDy :N` 启动。参数边界：宽 640–7680、高 480–4320、深 16/24；最多 4 个受管 display。
+- `start({display?, width?, height?, depth?})`：分配 `:90`–`:129` 空闲 display；在 0700 私有临时目录写 `Xauthority`（0600，cookie 32 hex，经 `xauth add` 写入）；以 `Xvfb -auth <file> -nolisten tcp -screen 0 WxHxDy :N` 启动。参数边界：宽 640–7680、高 480–4320、深 16/24；最多 16 个受管 display。
 - 状态：`serverId / display / 尺寸 / 状态 / 启动时间 / pid`，**不返回 cookie 内容**。
 - `stop(serverId?)`：SIGTERM（500ms 后 SIGKILL 兜底）、删除整个 cookie 目录、从注册表移除；`Sessions.stop()` 会 `stopAll()`。
 - 失败清理：xauth 写入失败、spawn 抛错、进程启动即退出，均删除 cookie 目录，不残留凭据。
@@ -52,8 +52,8 @@
 | #40 验收方向 | 状态 | 说明 |
 | --- | --- | --- |
 | 受管 X display 生命周期（启动/回收/凭据撤销） | 已实现 + 单测 | `test/xserver.test.js`（假 Xvfb/xauth，验证参数、Unix-only、0600/0700、stop 删除与进程终止） |
-| 实时窗口呈现（seamless / 多窗口） | NOT_RUN | 受宿主 CSP 与窗口面形态未裁决阻塞 |
-| 剪贴板双向 | NOT_RUN | 依赖窗口呈现方案 |
+| 实时窗口呈现（单 display 内多窗口） | 已实现 + 真实宿主验收 | 隔离 AIDE 容器内 SSH 自动分配受管 display，openbox + x11vnc + websockify 仅监听 127.0.0.1，Workbench noVNC 显示 xterm 窗口并截图留证 |
+| 剪贴板双向 | 已实现（受浏览器安全限制） | noVNC `clipboard` 事件缓存文本并提供“复制远程剪贴板”按钮（用户手势内 `writeText`，失败降级 `execCommand`）；画布 paste 调 `clipboardPasteFrom`。沙箱 iframe 无法无手势自动写剪贴板，未做原生端到端断言 |
 | 软件渲染可用 | 部分 | Xvfb 本身提供软件渲染；未在真实 Linux 主机跑 GLX/X 应用端到端 |
 | XDMCP 范围与安全决定 | 已裁决（不启用） | 见 §2 |
 | 硬件加速仅限已验证主机 | 已裁决（默认关闭） | 见 §2 |

@@ -1,0 +1,39 @@
+{
+  "version": "1.8.0",
+  "date": "2026-11-09",
+  "status": "candidate",
+  "plugin_suite": {
+    "image": "test/Dockerfile.test",
+    "passed": 67,
+    "failed": 0
+  },
+  "host_suite": {
+    "image": "golang:1.26-alpine + apk nodejs",
+    "command": "go test -mod=vendor ./internal/server -run \"TestPluginFileHandlerManifestResolution|TestWorkbenchManualSaveConflictAndProposalSeparation|TestWorkbenchViewer\"",
+    "passed": true
+  },
+  "host_acceptance": {
+    "environment": "isolated AIDE container (aarch64) built from source Dockerfile changes, real Workbench bridge, real sshd on 127.0.0.1:2222",
+    "checks": [
+      "iframe sandbox remains allow-scripts allow-downloads",
+      "X11 forwarding defaults on for a new SSH session",
+      "managed X display and viewer port assigned to the SSH session",
+      "noVNC connected through the host one-use viewer ticket proxy",
+      "xterm launched inside the forwarded display and rendered into the workbench canvas",
+      "one-click copy from sandboxed workbench reached the host clipboard (execCommand fallback)"
+    ],
+    "evidence": "docs/verification/terminal-1.8.0-graphics.png",
+    "errors": []
+  },
+  "not_run": [
+    "automatic clipboard write without user gesture (browser sandbox blocks it)",
+    "clipboard paste from host into remote window (implemented via paste event, not asserted end-to-end)",
+    "multiple DPI/zoom matrices",
+    "macOS/Windows Aide runtime without Xvfb",
+    "seamless native per-window integration"
+  ],
+  "candidate_zip": {
+    "bytes": 1246667,
+    "sha256": "d6953ba8ab2c8926560ff8e153c1f22cc9d8419ec39208904a3893ef51c9f044"
+  }
+}

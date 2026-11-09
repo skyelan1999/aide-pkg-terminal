@@ -27,6 +27,12 @@
       if(!dispatching){dispatching=true;queueMicrotask(dispatch);}
     });
   }
+  function enqueueViewer(args={}) {
+    return new Promise((resolve,reject)=>{
+      requests.normal.push({tool:'__viewer',args,resolve,reject});
+      if(!dispatching){dispatching=true;queueMicrotask(dispatch);}
+    });
+  }
   async function dispatch() {
     try {
       while(requests.input.length||requests.normal.length) {
@@ -36,7 +42,7 @@
         try {
           if(stopped)throw Error('工作台已关闭');
           if(!connected)throw Error('当前 Aide 尚未建立所需的常驻工作台通信，请更新 Aide 后重新打开');
-          const reply=await bridge.call('terminal_session_'+job.tool,job.args);
+          const reply=job.tool==='__viewer'?await bridge.viewer(job.args):await bridge.call('terminal_session_'+job.tool,job.args);
           if(reply.status!=='result')throw Error('操作未完成，请检查 Aide 中的待审批提案');
           job.resolve(reply.result);
         } catch(error) {job.reject(error);}
@@ -116,7 +122,7 @@
     $('connection-kind').textContent=rec?rec.kind.toUpperCase():'TERMINAL';
     $('detail-state').textContent=rec?(labels[rec.status]||rec.status):'尚未连接';
     $('detail-state').style.color=running?'var(--positive)':'var(--muted)';
-    $('detail-kind').textContent=rec?(kinds[rec.kind]||rec.kind)+(rec.x11Enabled?' / X11 已请求':'')+(rec.copiedFrom?' / 副本':'')+(rec.relayEnabled?' · 中继模式':''):'—';
+    $('detail-kind').textContent=rec?(kinds[rec.kind]||rec.kind)+(rec.x11Enabled?' / X11 已请求':rec.x11Unavailable?' / X11 不可用':'')+(rec.copiedFrom?' / 副本':'')+(rec.relayEnabled?' · 中继模式':''):'—';
     $('session-visible').disabled=!rec||paused;$('session-visible').checked=!!rec&&rec.visibleToAide!==false;
     $('relay-actions').hidden=!rec?.relayEnabled;$('relay-online').textContent=rec?.relayEnabled?'中继 '+(rec.relayOnline==='online'?'在线':rec.relayOnline==='offline'?'离线':'状态未知')+' · '+rec.relayEndpoint:'';for(const id of ['relay-probe','relay-script','relay-connect'])$(id).disabled=!rec||paused||(id==='relay-connect'&&(running||relayConnecting));
     $('detail-endpoint').textContent=rec?endpoint(rec):'—';
@@ -126,6 +132,10 @@
     $('detail-logging').textContent=rec?(rec.logging?(running?'● 记录中':'已启用'):'已暂停'):'未开启';
     $('detail-logging').style.color=rec?.logging?'var(--positive)':'var(--muted)';
     $('output-mode').textContent=rec?(running?'实时输出':'保留的会话输出'):'等待连接';$('display-settings').disabled=!rec;
+    const graphical=!!rec&&rec.kind==='ssh'&&rec.x11Enabled;
+    $('graphical').hidden=!graphical;
+    $('graphical').disabled=!connected||paused||!rec?.x11ViewerPort;
+    $('graphical').title=rec?.x11ViewerPort?'在 Aide 内打开受管 X display 的图形窗口':'图形服务尚未启动';
     $('empty').hidden=!!rec;
     for(const id of ['new-top','new-empty','new-session'])$(id).disabled=!connected;
     for(const id of ['find','logs','logging'])$(id).disabled=!rec;
@@ -143,7 +153,58 @@
     $('log-status').style.color=rec?.logError?'var(--danger)':'';
     let displayChanged=false;for(const [id,pane] of panes){const prefs=prefsFor(id),signature=prefs.lineNumbers+':'+prefs.timestamps;if(pane.displaySignature!==signature){applyDisplayPrefs(id,pane);if(id===selected)displayChanged=true;}pane.element.hidden=id!==selected;pane.term.options.disableStdin=paused||sessions.find(s=>s.id===id)?.status!=='running';}if(displayChanged)requestAnimationFrame(fitSelected);
   }
+  let rfb = null, graphicalSessionId = null, graphicalClipboard = '';
+  async function writeBrowserClipboard(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
+    const area = document.createElement('textarea');area.value = text;area.setAttribute('readonly','');area.style.position='fixed';area.style.left='-9999px';document.body.append(area);area.select();
+    let ok = false;try { ok = document.execCommand('copy'); } catch (_) {}
+    area.remove();return ok;
+  }
+  function closeGraphical() {
+    if (rfb) { try { rfb.disconnect(); } catch (_) {} rfb = null; }
+    graphicalSessionId = null;graphicalClipboard = '';
+    $('graphical-pane').hidden = true;$('graphical-copy').hidden = true;
+    $('graphical-screen').replaceChildren();
+  }
+  async function openGraphical() {
+    const rec = current();
+    if (!rec || rec.kind !== 'ssh' || !rec.x11Enabled) return message('当前会话未启用 X11 图形转发');
+    if (!rec.x11ViewerPort) return message('图形窗口服务未就绪：请确认运行环境包含 x11vnc 与 websockify，然后重新连接会话');
+    if (typeof AideTerminalRFB !== 'function') return message('图形组件未加载，请重新打开工作台');
+    try {
+      const granted = await enqueueViewer({ port: rec.x11ViewerPort });
+      const url = new URL(granted.url, location.href);
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      closeGraphical();
+      graphicalSessionId = rec.id;
+      $('graphical-pane').hidden = false;
+      $('graphical-state').textContent = '正在连接 ' + rec.x11Display;
+      const screen = $('graphical-screen');
+      rfb = new AideTerminalRFB(screen, url.toString(), { credentials: { password: '' }, scaleViewport: true, clipViewport: false, focusOnClick: true });
+      rfb.addEventListener('connect', () => {
+        $('graphical-state').textContent = rec.x11Display + ' · 图形已连接 · 远程剪贴板可用';
+        screen.focus();
+        if (rfb && rfb.focusOnClick !== undefined) rfb.focusOnClick = true;
+      });
+      rfb.addEventListener('disconnect', event => {
+        $('graphical-state').textContent = '图形窗口已断开' + (event.detail?.clean === false ? '（连接异常）' : '');
+        rfb = null;
+      });
+      rfb.addEventListener('clipboard', event => {
+        const text = event.detail?.text;
+        if (typeof text !== 'string') return;
+        graphicalClipboard = text;
+        $('graphical-copy').hidden = false;
+        writeBrowserClipboard(text).catch(() => {});
+      });
+      screen.onpaste = event => {
+        const text = event.clipboardData?.getData('text');
+        if (text && rfb) { rfb.clipboardPasteFrom(text); event.preventDefault(); }
+      };
+    } catch (error) { closeGraphical(); fail(error); }
+  }
   function select(id) {
+    if (graphicalSessionId && graphicalSessionId !== id) closeGraphical();
     selected=id;terminal(id);render();document.body.classList.remove('sidebar-open');$('sidebar-toggle').setAttribute('aria-expanded','false');
     requestAnimationFrame(()=>{fitSelected();panes.get(id)?.term.focus();});
     if(!paused)poll();
@@ -265,7 +326,7 @@
     catch(error){fail(error);}
   };
   $('session-visible').onchange=async()=>{const rec=current();if(!rec)return;try{const result=await enqueue('visibility',{id:rec.id,visible:$('session-visible').checked});Object.assign(rec,result.session);render();}catch(error){render();fail(error);}};
-  $('x11-enabled').onchange=()=>{$('x11-settings').hidden=!$('x11-enabled').checked;};
+  $('x11-enabled').onchange=()=>{$('x11-settings').hidden=true;};
   let copySource=null;
   $('copy-session').onclick=()=>{const rec=current();if(!rec||!sessionCopyCapable||rec.copyable===false)return;copySource=rec.id;$('copy-source').textContent='源会话：'+rec.name+' / '+endpoint(rec)+(rec.relayEnabled?' / 已部署中继':'');$('copy-name').value=(rec.name.slice(0,70)+' 副本');$('copy-error').textContent='';$('copy-connect').disabled=rec.copyConnectable===false;$('copy-exclusive').hidden=rec.copyConnectable!==false;$('copy-independent-ssh').hidden=rec.kind!=='workspace';$('copy-dialog').showModal();};
   $('copy-cancel').onclick=()=>$('copy-dialog').close();
@@ -275,7 +336,7 @@
     finally{copying=false;$('copy-settings').disabled=false;$('copy-connect').disabled=sessions.find(s=>s.id===copySource)?.copyConnectable===false;$('copy-independent-ssh').disabled=false;render();}
   }
   $('copy-settings').onclick=()=>copySession(false);$('copy-connect').onclick=()=>copySession(true);
-  $('copy-independent-ssh').onclick=()=>{const rec=sessions.find(s=>s.id===copySource);if(!rec||rec.kind!=='workspace')return;$('copy-dialog').close();$('kind').value='ssh';$('relay-enabled').checked=false;$('kind').onchange();const f=$('create-form');f.elements.name.value=rec.name.slice(0,65)+' SSH';f.elements.host.value=rec.host||'';f.elements.port.value=String(rec.port||22);f.elements.username.value=rec.username||'';$('auth').value='password';$('auth').onchange();f.elements.identityFile.value='';f.elements.x11Enabled.checked=false;$('x11-enabled').onchange();openCreate();message('独立 SSH 需要重新认证，不复用工作区 master 或复制其凭据。准备好 X Server 后可在此启用 X11。');};
+  $('copy-independent-ssh').onclick=()=>{const rec=sessions.find(s=>s.id===copySource);if(!rec||rec.kind!=='workspace')return;$('copy-dialog').close();$('kind').value='ssh';$('relay-enabled').checked=false;$('kind').onchange();const f=$('create-form');f.elements.name.value=rec.name.slice(0,65)+' SSH';f.elements.host.value=rec.host||'';f.elements.port.value=String(rec.port||22);f.elements.username.value=rec.username||'';$('auth').value='password';$('auth').onchange();f.elements.identityFile.value='';f.elements.x11Enabled.checked=true;$('x11-enabled').onchange();openCreate();message('独立 SSH 需要重新认证，不复用工作区 master 或复制其凭据；已默认启用 Aide 内置图形窗口。');};
   $('relay-probe').onclick=async()=>{const rec=current();if(!rec?.relayEnabled)return;$('relay-probe').disabled=true;try{const result=await enqueue('relay_status',{id:rec.id});Object.assign(rec,result.session);render();}catch(error){fail(error);}finally{$('relay-probe').disabled=false;}};
   $('relay-connect').onclick=async()=>{const rec=current();if(!rec?.relayEnabled||relayConnecting)return;relayConnecting=true;$('relay-connect').disabled=true;try{const result=await enqueue('relay_connect',{id:rec.id,identityFile:rec.identityFile,identitySource:rec.identitySource});Object.assign(rec,result.session);select(rec.id);}catch(error){message('中继连接失败：'+error.message);}finally{relayConnecting=false;render();}};
   $('relay-script').onclick=async()=>{const rec=current();if(!rec?.relayEnabled)return;try{const result=await enqueue('relay_script',{id:rec.id});const output=bytes(result.data);window.parent.postMessage({type:'aide.workbench.export',protocol:1,pluginId:'terminal',requestId:'export_'+(++exportId),name:result.name,bytes:output.buffer},'*',[output.buffer]);}catch(error){fail(error);}};
@@ -337,7 +398,10 @@
     }
   });
   window.parent.postMessage({type:'aide.workbench.theme.ready',protocol:1},'*');
-  window.addEventListener('pagehide',()=>{stopped=true;clearTimeout(pollTimer);bridge.close();for(const p of pendingInput.values())clearTimeout(p.timer);});
+  $('graphical').onclick=openGraphical;
+  $('graphical-copy').onclick=async()=>{if(!graphicalClipboard)return;const ok=await writeBrowserClipboard(graphicalClipboard);$('graphical-state').textContent=ok?'已复制远程剪贴板':'复制被浏览器拒绝，请在画面中手动选择';};
+  $('graphical-close').onclick=closeGraphical;
+  window.addEventListener('pagehide',()=>{closeGraphical();stopped=true;clearTimeout(pollTimer);bridge.close();for(const p of pendingInput.values())clearTimeout(p.timer);});
   render();bridge.connect().then(info=>{
     if(!['bridge.renew','daemon.detach'].every(x=>info.capabilities?.includes(x)))throw Error('请先更新 Aide：此工作台需要支持通信续期和常驻会话分离的宿主版本。');
     connected=true;paused=false;render();return poll();

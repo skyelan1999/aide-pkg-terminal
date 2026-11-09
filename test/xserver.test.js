@@ -14,7 +14,7 @@ function fakeBin(root){
 
 test('managed X display starts Unix-only Xvfb with a private cookie and revokes it on stop (issue #40)',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'aide-xserver-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const fake=fakeBin(root);const manager=new XServers({bin:fake.bin,xauth:fake.xauth,env:fake.env});
+ const fake=fakeBin(root);const manager=new XServers({bin:fake.bin,xauth:fake.xauth,env:fake.env,x11vnc:'x11vnc-missing',websockify:'websockify-missing',openbox:'openbox-missing'});
  t.after(()=>manager.stopAll());
  const server=await manager.start({width:1024,height:768,depth:24});
  assert.equal(server.display,':90');assert.equal(server.status,'running');assert.equal(manager.usage(),1);
@@ -35,12 +35,12 @@ test('managed X display starts Unix-only Xvfb with a private cookie and revokes 
 
 test('managed X display rejects invalid geometry, displays and over-allocation',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'aide-xserver-bad-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const fake=fakeBin(root);const manager=new XServers({bin:fake.bin,xauth:fake.xauth,env:fake.env});t.after(()=>manager.stopAll());
+ const fake=fakeBin(root);const manager=new XServers({bin:fake.bin,xauth:fake.xauth,env:fake.env,x11vnc:'x11vnc-missing',websockify:'websockify-missing',openbox:'openbox-missing'});t.after(()=>manager.stopAll());
  await assert.rejects(manager.start({width:400}),/width/);
  await assert.rejects(manager.start({depth:8}),/depth/);
  await assert.rejects(manager.start({display:':5'}),/display/);
  await assert.rejects(manager.start({display:'127.0.0.1:90'}),/display/);
- const started=[];for(let i=0;i<4;i++)started.push(await manager.start());
- await assert.rejects(manager.start(),/最多 4 个/);
+ const started=[];for(let i=0;i<16;i++)started.push(await manager.start());
+ await assert.rejects(manager.start(),/最多 16 个/);
  await assert.rejects(manager.stop('x-does-not-exist'),/不存在/);
 });

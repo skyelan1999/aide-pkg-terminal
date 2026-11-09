@@ -7,19 +7,53 @@
  *   - cookie 文件放在 0700 私有临时目录，stop 时删除；
  *   - 不安装、不修改系统 X Server，不读取用户 ~/.Xauthority。
  *
- * 窗口呈现（seamless/multiwindow viewer）不在本阶段：Workbench iframe 的 CSP
- * 为 connect-src 'none' / frame-src 'none'，需要宿主侧单独评审的安全设计。
+ * 同一受管 display 可选附带图形窗口通道：openbox（窗口管理）+ x11vnc（只绑
+ * 127.0.0.1）+ websockify（只绑 127.0.0.1）。Workbench 通过宿主的
+ * /plugin-viewer 一次性票据连入，插件本身不暴露任何非回环端口。
  */
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const net = require('node:net');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 
-const MAX_SERVERS = 4;
+const MAX_SERVERS = 16;
 const DISPLAY_MIN = 90;
 const DISPLAY_MAX = 129;
 const WIDTH = [640, 7680], HEIGHT = [480, 4320], DEPTHS = [16, 24];
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const port = probe.address().port;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+function waitPort(port, timeout = 6000) {
+  const deadline = Date.now() + timeout;
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      const socket = net.connect({ host: '127.0.0.1', port });
+      socket.once('connect', () => { socket.destroy(); resolve(); });
+      socket.once('error', () => {
+        socket.destroy();
+        if (Date.now() > deadline) reject(Error('窗口服务 ' + port + ' 未就绪'));
+        else setTimeout(attempt, 150);
+      });
+    };
+    attempt();
+  });
+}
+
+function usableBinary(bin, args, env) {
+  const probe = spawnSync(bin, args, { encoding: 'utf8', timeout: 3000, env, maxBuffer: 8192 });
+  return !probe.error || probe.error.code !== 'ENOENT';
+}
 
 function integer(value, fallback, min, max, label) {
   const n = value === undefined || value === null || value === '' ? fallback : Number(value);
@@ -41,6 +75,9 @@ class XServers {
     this.seq = 0;
     this.env = options.env || process.env;
     this.bin = options.bin || this.env.TERMINAL_XVFB_BIN || 'Xvfb';
+    this.x11vnc = options.x11vnc || this.env.TERMINAL_X11VNC_BIN || 'x11vnc';
+    this.websockify = options.websockify || this.env.TERMINAL_WEBSOCKIFY_BIN || 'websockify';
+    this.openbox = options.openbox || this.env.TERMINAL_OPENBOX_BIN || 'openbox';
     this.spawnImpl = options.spawnImpl || spawn;
     this.xauth = options.xauth || findXauth(this.env);
   }
@@ -50,7 +87,12 @@ class XServers {
   }
 
   public(server) {
-    return { serverId: server.id, display: server.display, width: server.width, height: server.height, depth: server.depth, status: server.status, startedAt: server.startedAt, pid: server.process?.pid || null };
+    return { serverId: server.id, display: server.display, width: server.width, height: server.height, depth: server.depth, status: server.status, startedAt: server.startedAt, pid: server.process?.pid || null, viewer: server.viewer ? { status: server.viewer.status, wsPort: server.viewer.wsPort || null } : null };
+  }
+
+  authorityFile(serverId) {
+    const server = this.servers.get(String(serverId));
+    return server?.cookieFile && fs.existsSync(server.cookieFile) ? server.cookieFile : null;
   }
 
   usage() { return this.servers.size; }
@@ -106,10 +148,55 @@ class XServers {
     await new Promise(resolve => setTimeout(resolve, 300));
     if (server.status === 'starting') server.status = 'running';
     if (server.status === 'error') throw Error(server.error || 'Xvfb 启动失败');
+    if (args.viewer !== false) await this.attachViewer(server);
     return this.public(server);
   }
 
+  async attachViewer(server) {
+    if (!usableBinary(this.x11vnc, ['-version'], this.env)) {
+      server.viewer = { status: 'unavailable', reason: 'x11vnc 未安装' };
+      return;
+    }
+    if (!usableBinary(this.websockify, ['--help'], this.env)) {
+      server.viewer = { status: 'unavailable', reason: 'websockify 未安装' };
+      return;
+    }
+    const env = { ...this.env, DISPLAY: server.display, XAUTHORITY: server.cookieFile };
+    server.viewer = { status: 'starting', processes: [] };
+    try {
+      // openbox 只影响窗口外观；缺失时不阻断画面。
+      if (usableBinary(this.openbox, ['--version'], env)) {
+        const wm = this.spawnImpl(this.openbox, [], { stdio: 'ignore', env });
+        server.viewer.processes.push(wm);
+        wm.once('error', () => {});
+      }
+      const vncPort = await freePort();
+      const wsPort = await freePort();
+      const vnc = this.spawnImpl(this.x11vnc, ['-display', server.display, '-auth', server.cookieFile, '-localhost', '-nopw', '-rfbport', String(vncPort), '-forever', '-shared', '-quiet', '-noxdamage'], { stdio: 'ignore', env });
+      server.viewer.processes.push(vnc);
+      vnc.once('error', error => { if (server.viewer) server.viewer.error = String(error.message).slice(0, 160); });
+      await waitPort(vncPort);
+      const ws = this.spawnImpl(this.websockify, ['127.0.0.1:' + wsPort, '127.0.0.1:' + vncPort], { stdio: 'ignore', env });
+      server.viewer.processes.push(ws);
+      ws.once('error', error => { if (server.viewer) server.viewer.error = String(error.message).slice(0, 160); });
+      await waitPort(wsPort);
+      server.viewer.status = 'running';
+      server.viewer.vncPort = vncPort;
+      server.viewer.wsPort = wsPort;
+    } catch (error) {
+      server.viewer.status = 'error';
+      server.viewer.reason = String(error.message).slice(0, 160);
+      for (const child of server.viewer.processes) { try { child.kill('SIGTERM'); } catch (_) {} }
+    }
+  }
+
   cleanup(server) {
+    if (server.viewer?.processes) {
+      for (const child of server.viewer.processes) {
+        try { child.kill('SIGTERM'); } catch (_) {}
+      }
+      server.viewer.processes = [];
+    }
     try { fs.rmSync(server.dir, { recursive: true, force: true }); } catch (_) {}
     server.cookieFile = null;
   }

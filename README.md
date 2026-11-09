@@ -1,6 +1,6 @@
 # Terminal · Aide 设备终端工作台
 
-**1.7.1；实际发行状态以 GitHub Release 为准。** 要求配套 Aide **v0.1.18.0-RC2 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**1.8.0（候选，尚未发布）；实际发行状态以 GitHub Release 为准。** 图形窗口需要同步构建的 Aide 宿主（内含 viewer ticket 代理与 xvfb/x11vnc/openbox/websockify）；在旧宿主上 SSH 仍可用，但不会出现图形窗口。基础功能仍兼容 **v0.1.18.0-RC2 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
 
 ## 安装与兼容
 
@@ -155,6 +155,12 @@ Shell/SSH 命令、设备收发与日志仍沿用原会话机制；中继在线�
 ## 1.5.3：TCP 代理背压（Aide #588）
 
 双向 pipe 随接收端的 drain 暂停/恢复来源，保留半关闭，错误或关闭时清理两端；连接数超额时先拒绝再建后端。真实慢接收端回归在两个方向各发送 32 MiB，验证拥塞时来源暂停、队列受控和恢复后的长度/SHA256 一致。该观测不是所有 OS 的固定队列上限。保留 1.5.2 输入调度修复；安装/升级会结束现有设备连接，不自动重放输入。
+
+## 1.8.0：MobaXterm 式开箱即用图形窗口（issue #42）
+
+新建 SSH 会话默认启用图形转发，无需安装 XQuartz/Xorg、无需填写 DISPLAY/Xauthority。插件在 Aide 运行环境内自动分配受管 Xvfb display、生成 0600 临时 Xauthority，并附带 openbox 窗口管理器、仅监听 127.0.0.1 的 x11vnc 与 websockify；会话重连时重建 display，结束后回收进程与 cookie。宿主按插件声明的 `workbench.viewer.protocol=1` 签发一次性 viewer 票据，并把同源 `/plugin-viewer/<ticket>/websockify` 反向代理到 loopback；CSP 只把 `connect-src` 钉到当前宿主确切 origin，沙箱保持 `allow-scripts allow-downloads` 且无 `allow-same-origin`。Workbench 内联 noVNC 1.4，支持 `scaleViewport` 缩放；远程剪贴板到达时提供“复制远程剪贴板”按钮（浏览器沙箱禁止无手势写剪贴板，点击后经用户手势写入），画布内 Ctrl+V 通过 paste 事件回填远端。图形窗口在独立面板打开，终端与图形可分别关闭。
+
+验收：Docker Linux 套件 67/67；隔离 AIDE 容器中经真实 Workbench bridge 连接真实 sshd，自动分配 display :90、x11vnc/websockify 仅 loopback、noVNC 连接成功并显示通过 X11 转发启动的 xterm 窗口，截图见 `docs/verification/terminal-1.8.0-graphics.png`。远程剪贴板为按钮触发的用户手势复制（浏览器沙箱不允许无手势自动写剪贴板）；不同 DPI/缩放屏幕矩阵尚未做端到端断言。
 
 ## 1.7.1：发送可靠性、UDP 与容量修复
 
