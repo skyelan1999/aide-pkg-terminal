@@ -12,7 +12,9 @@ test('workbench send control is click-driven because the AIDE iframe sandbox has
   assert(!html.includes('<button type="submit" id="send-packet"'),file+' must not keep a submit send control');
   assert(html.includes('id="communication-send"'),file+' keeps the send form container for layout');
  }
- const js=fs.readFileSync(path.join(root,'src/workbench.js'),'utf8');
+ const source=path.join(root,'src/workbench.js');
+ // 运行包内只内联 workbench.html，没有 src/；两种布局都要能校验。
+ const js=fs.existsSync(source)?fs.readFileSync(source,'utf8'):fs.readFileSync(path.join(root,'workbench.html'),'utf8');
  assert(/\$\('send-packet'\)\.onclick\s*=\s*event\s*=>/.test(js),'send button has an explicit click handler');
  assert(/\$\('communication-send'\)\.onsubmit\s*=\s*event\s*=>/.test(js),'submit handler stays as a non-sandboxed fallback');
  assert(/let sendingPacket = false/.test(js),'duplicate submissions are guarded');
