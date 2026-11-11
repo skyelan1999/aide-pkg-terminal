@@ -1,0 +1,28 @@
+{
+  "version": "1.8.1",
+  "date": "2026-11-11",
+  "stage": "release prepared; publication checked separately on GitHub",
+  "issue": "https://github.com/skyelan1999/aide/issues/848",
+  "package": {
+    "file": "packages/v1.8.1/aide-pkg-terminal-v1.8.1.zip",
+    "bytes": 1230048,
+    "sha256": "fc42c5a33f4ba440340fa25956aeed6c8b5b3b1561f477f8126064b6b1da5bc3"
+  },
+  "localRuntime": "Existing local Aide instance / aide-aide-1; no new Aide or local Docker instance",
+  "sourceChecks": "75 source tests passed at 12ms exploration window; final 32ms targeted tests 10/10 passed",
+  "extractedRuntime": "Final release ZIP 70/70 passed; source runtime unchanged from installed performance candidate, README release wording updated",
+  "hostUi": "Current native Aide: TLS/Telnet reconnect, ordered input zabcdefghijz echoed once, explicit close; 4 owned test records removed",
+  "measurement": {
+    "fixture": "Actual local Workbench bridge and TLS1.3 relay; Telnet target adds 25ms delay; 8 keys; excludes browser paint",
+    "baselineMedianMs": 82.45,
+    "finalMedianMs": 40.93,
+    "baselineCallsPerKey": 3,
+    "finalCallsPerKey": 1
+  },
+  "limits": [
+    "Customer WAN/SSH devices and physical serial hardware not tested",
+    "Native customer Windows/macOS remote relay hardware not tested",
+    "Existing remote serial scripts require explicit re-download and redeployment"
+  ],
+  "rollback": "Keep terminal-private state and session logs; previous install backups retained. Restore prior plugin package or market listing, not user data."
+}

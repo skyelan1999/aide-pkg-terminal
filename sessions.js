@@ -97,6 +97,7 @@ class Sessions {
     rec.history = Buffer.concat([rec.history, buffer]); rec.offset += buffer.length;
     if (rec.history.length > HISTORY) rec.history = rec.history.subarray(-HISTORY);
     rec.base = rec.offset - rec.history.length;
+    for (const ready of rec.outputWaiters || []) ready();
   }
   logOutput(rec,buffer) {
     if(rec.logLineNumber===undefined)rec.logLineNumber=0;if(rec.logLineStart===undefined)rec.logLineStart=true;
@@ -134,7 +135,7 @@ class Sessions {
   }
   list(workspace) {
     const space = this.space(workspace);
-    return {capabilities:{sessionCopy:workspace?.sessionCopyVersion===1},workspace:{mode:space.remote?'ssh':'local',host:space.remote?.host,path:space.remote?.path},sessions:[...space.records.values()].filter(rec=>workspace?.workbench===true||rec.visibleToAide!==false).map(rec => this.public(rec)), storage:workspace?.stateRoot?'Aide 私有会话存储（按工作区隔离）':space.remote?'Aide 数据目录 / terminal-workspaces/<工作区标识>/.aide/terminal-workbench':'.aide/terminal-workbench', limits:{sessions:MAX_SESSIONS,active:MAX_ACTIVE,logBytes:LOG_BYTES,logFiles:LOG_FILES}};
+    return {capabilities:{inputReadback:true,sessionCopy:workspace?.sessionCopyVersion===1},workspace:{mode:space.remote?'ssh':'local',host:space.remote?.host,path:space.remote?.path},sessions:[...space.records.values()].filter(rec=>workspace?.workbench===true||rec.visibleToAide!==false).map(rec => this.public(rec)), storage:workspace?.stateRoot?'Aide 私有会话存储（按工作区隔离）':space.remote?'Aide 数据目录 / terminal-workspaces/<工作区标识>/.aide/terminal-workbench':'.aide/terminal-workbench', limits:{sessions:MAX_SESSIONS,active:MAX_ACTIVE,logBytes:LOG_BYTES,logFiles:LOG_FILES}};
   }
   async create(workspace, args, existing) {
     if (this.stopping) throw Error('后台正在停止');
@@ -491,6 +492,35 @@ class Sessions {
     return comm.call(name,values);
   }
   send(workspace, args) {
+    if (args.offset !== undefined) {
+      // Validate before any input can execute. A readback failure must never
+      // turn invalid parameters into a partly accepted write.
+      if (!Number.isSafeInteger(args.offset) || args.offset < 0) throw Error('offset must be a non-negative safe integer');
+      const requested = args.offset;
+      const rec = this.get(this.space(workspace), args.id, workspace);
+      return this.sendWithOutput(workspace, rec, args, requested);
+    }
+    return this.sendInput(workspace, args);
+  }
+  async sendWithOutput(workspace, rec, args, requested) {
+    const result = await this.sendInput(workspace, args);
+    // One short bounded wait may return a remote echo in the input ACK,
+    // removing a second host RPC. Never wait on bulk paste or communication
+    // packets, and never infer an echo from the bytes we just sent.
+    if (['local','workspace','ssh','telnet'].includes(rec.kind) &&
+        Buffer.byteLength(args.data) <= 256 && rec.offset === requested && !this.stopping) {
+      await new Promise(resolve => {
+        rec.outputWaiters ||= new Set();
+        const ready = () => { clearTimeout(timer); rec.outputWaiters.delete(ready); resolve(); };
+        const timer = setTimeout(ready, 32);
+        rec.outputWaiters.add(ready);
+      });
+    }
+    // A stale/invisible target must not expose output after an async write.
+    this.get(this.space(workspace), args.id, workspace);
+    return {...result, output:this.outputSince(rec, requested)};
+  }
+  sendInput(workspace, args) {
     const rec = this.get(this.space(workspace), args.id,workspace);
     if (!rec.worker || rec.status !== 'running') throw Error('会话已结束，创建新会话后重试');
     if(rec.kind==='telnet')return this.sendTelnet(this.space(workspace),rec,args);
@@ -513,8 +543,11 @@ class Sessions {
     const space = this.space(workspace), rec = args.id ? this.get(space,args.id,workspace) : null;
     if (!rec) return this.list(workspace);
     const requested = integer(args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    return {...this.list(workspace), output:this.outputSince(rec, requested)};
+  }
+  outputSince(rec, requested) {
     const start = Math.max(rec.base, Math.min(requested,rec.offset)), end = Math.min(rec.offset,start+PAGE);
-    return {...this.list(workspace), output:{id:rec.id, data:rec.history.subarray(start-rec.base,end-rec.base).toString('base64'), offset:end, reset:requested < rec.base || requested > rec.offset, more:end < rec.offset}};
+    return {id:rec.id, start, data:rec.history.subarray(start-rec.base,end-rec.base).toString('base64'), offset:end, reset:requested < rec.base || requested > rec.offset, more:end < rec.offset};
   }
   async close(workspace, args) {
     const space = this.space(workspace), rec = this.get(space,args.id,workspace);

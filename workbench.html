@@ -296,7 +296,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
   const panes = new Map(), pendingInput = new Map();
   let sessionFilter = 'all', workspaceMode = 'local';
   let sessions = [], selected = null, polling = false, paused = true, connected = false, stopped = false, exportId = 0, relayConnecting = false, sessionReconnecting = false, sessionCopyCapable=false, copying=false;
-  let pollTimer = null, pollRequested = false, interactiveUntil = 0;
+  let pollTimer = null, pollRequested = false, interactiveUntil = 0, emptyPolls = 0, inputReadback = false;
   function schedulePoll(delay = 0) {
     clearTimeout(pollTimer);pollTimer=null;
     if(paused||stopped)return;
@@ -334,7 +334,10 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
         try {
           if(stopped)throw Error('工作台已关闭');
           if(!connected)throw Error('当前 Aide 尚未建立所需的常驻工作台通信，请更新 Aide 后重新打开');
-          const reply=job.tool==='__viewer'?await bridge.viewer(job.args):await bridge.call('terminal_session_'+job.tool,job.args);
+          // Resolve the offset at dispatch, after earlier queued polls finish.
+          // Older daemons remain compatible until they advertise readback.
+          const args=job.tool==='input'&&inputReadback&&panes.has(job.args.id)?{...job.args,offset:panes.get(job.args.id).offset}:job.args;
+          const reply=job.tool==='__viewer'?await bridge.viewer(args):await bridge.call('terminal_session_'+job.tool,args);
           if(reply.status!=='result')throw Error('操作未完成，请检查 Aide 中的待审批提案');
           job.resolve(reply.result);
         } catch(error) {job.reject(error);}
@@ -355,7 +358,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
       if (paused || selected !== id || sessions.find(s=>s.id===id)?.status !== 'running'||communication(sessions.find(s=>s.id===id))) return;
       let pending = pendingInput.get(id);
       if (!pending) { pending={text:'',timer:null,sending:false};pendingInput.set(id,pending); }
-      interactiveUntil=Date.now()+1500;
+      interactiveUntil=Date.now()+1500;emptyPolls=0;
       pending.text += data;
       if (pending.text.length > 65536) { pending.text='';paused=true;message('输入过多，已暂停发送；请检查设备后重新连接工作台');return; }
       if (!pending.timer) pending.timer=setTimeout(()=>flushInput(id),8);
@@ -364,7 +367,7 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
     term.parser.registerOscHandler(52,()=>true);
     const state={term,fit,search,element,gutter,offset:0,cols:0,rows:0,timestamps:new Map(),pendingTimestamp:null};
     term.onLineFeed(()=>{const active=term.buffer.active,row=active.baseY+active.cursorY;state.timestamps.set(row,state.pendingTimestamp||new Date());while(state.timestamps.size>12000)state.timestamps.delete(state.timestamps.keys().next().value);});
-    term.onScroll(viewportY=>requestAnimationFrame(()=>renderGutter(id,viewportY)));term.element?.querySelector('.xterm-viewport')?.addEventListener('scroll',()=>requestAnimationFrame(()=>renderGutter(id)),{passive:true});term.onWriteParsed(()=>requestAnimationFrame(()=>renderGutter(id)));panes.set(id,state);applyDisplayPrefs(id,state);return state;
+    term.onScroll(viewportY=>scheduleGutter(id,viewportY));term.element?.querySelector('.xterm-viewport')?.addEventListener('scroll',()=>scheduleGutter(id),{passive:true});term.onWriteParsed(()=>scheduleGutter(id));panes.set(id,state);applyDisplayPrefs(id,state);return state;
   }
   async function flushInput(id) {
     const pending=pendingInput.get(id);if(!pending)return;
@@ -377,12 +380,28 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
           if(paused||stopped)break;
           let end=Math.min(start+4096,input.length);
           if(sessions.find(s=>s.id===id)?.kind==='telnet'&&end<input.length&&((input.charCodeAt(end-1)>=0xd800&&input.charCodeAt(end-1)<=0xdbff)||(input[end-1]==='\r'&&input[end]==='\n')))end--;
-          await enqueue('input',{id,data:input.slice(start,end)});start=end;
-          schedulePoll();
+          const result=await enqueue('input',{id,data:input.slice(start,end)});start=end;
+          if(result.output)acceptOutput(id,result.output);
+          schedulePoll(result.output?.data&&!result.output.more?16:0);
         }
       }
     } catch(error) { paused=true;for(const p of pendingInput.values())p.text='';message('输入结果待核实，不会自动重发。'+error.message); }
     finally {pending.sending=false;}
+  }
+  function scheduleGutter(id, viewport) {
+    const pane=panes.get(id);if(!pane)return;
+    pane.gutterViewport=viewport;
+    if(pane.gutterFrame)return;
+    pane.gutterFrame=requestAnimationFrame(()=>{pane.gutterFrame=null;renderGutter(id,pane.gutterViewport);});
+  }
+  function acceptOutput(id, output) {
+    const pane=panes.get(id);if(!pane||output.id!==id)return;
+    if(!output.reset&&output.offset<=pane.offset)return;
+    if(output.reset){pane.term.reset();pane.timestamps.clear();pane.term.writeln('\x1b[33m[恢复保留的输出尾部；完整记录请查看磁盘日志]\x1b[0m');}
+    let data=bytes(output.data||'');
+    if(!output.reset&&Number.isInteger(output.start)&&output.start<pane.offset)data=data.subarray(pane.offset-output.start);
+    if(data.length){pane.pendingTimestamp=new Date();const active=pane.term.buffer.active;pane.timestamps.set(active.baseY+active.cursorY,pane.pendingTimestamp);pane.term.write(data,()=>scheduleGutter(id));emptyPolls=0;interactiveUntil=Math.max(interactiveUntil,Date.now()+500);}
+    pane.offset=output.offset;
   }
   const displayPrefs = new Map();
   function prefsFor(id){const rec=sessions.find(s=>s.id===id);if(rec?.displaySettingsVersion===1){const prefs={lineNumbers:rec.displayLineNumbers===true,timestamps:rec.displayTimestamps===true};displayPrefs.set(id,prefs);return prefs;}if(!displayPrefs.has(id)){let prefs={lineNumbers:false,timestamps:false};try{const saved=JSON.parse(localStorage.getItem('aide.terminal.display.'+id)||'null');if(saved&&typeof saved==='object')prefs={lineNumbers:saved.lineNumbers===true,timestamps:saved.timestamps===true};}catch(_){}displayPrefs.set(id,prefs);}return displayPrefs.get(id);}
@@ -522,17 +541,17 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
     const id=selected,pane=panes.get(id);
     try {
       const result=await enqueue('poll',id?{id,offset:pane?.offset||0}:{});
-      const signature=JSON.stringify(sessions);sessions=result.sessions;sessionCopyCapable=result.capabilities?.sessionCopy===true;workspaceMode=result.workspace?.mode||'local';$('storage-path').textContent=result.storage||'.aide/terminal-workbench';$('kind').options[0].textContent=workspaceMode==='ssh'?'工作区 Shell · 已连接 SSH 主机':'工作区 Shell · Aide 本地环境';
+      const signature=JSON.stringify(sessions);sessions=result.sessions;inputReadback=result.capabilities?.inputReadback===true;sessionCopyCapable=result.capabilities?.sessionCopy===true;workspaceMode=result.workspace?.mode||'local';$('storage-path').textContent=result.storage||'.aide/terminal-workbench';$('kind').options[0].textContent=workspaceMode==='ssh'?'工作区 Shell · 已连接 SSH 主机':'工作区 Shell · Aide 本地环境';
       if(result.output&&pane) {
-        if(result.output.reset){pane.term.reset();pane.timestamps.clear();pane.term.writeln('\x1b[33m[恢复保留的输出尾部；完整记录请查看磁盘日志]\x1b[0m');}
-        if(result.output.data){pane.pendingTimestamp=new Date();const active=pane.term.buffer.active;pane.timestamps.set(active.baseY+active.cursorY,pane.pendingTimestamp);pane.term.write(bytes(result.output.data),()=>renderGutter(id));}pane.offset=result.output.offset;more=!!result.output.more;
-        if(result.output.data)interactiveUntil=Math.max(interactiveUntil,Date.now()+500);
+        acceptOutput(id,result.output);more=!!result.output.more;
+        emptyPolls=result.output.data?0:Math.min(emptyPolls+1,4);
       }
       if(!selected&&sessions.length){select(sessions[0].id);}else if(signature!==JSON.stringify(sessions))render();
     } catch(error) { paused=true;render();message('后台通信已暂停，已有会话可能仍在运行。'+error.message+'；请检查后重新打开工作台。'); }
     finally {
       polling=false;const immediate=pollRequested||more;pollRequested=false;
-      schedulePoll(document.hidden?1000:immediate?0:Date.now()<interactiveUntil?40:current()?.status==='running'?180:650);
+      const interactiveDelay=emptyPolls===0?16:Math.min(40,8*2**(emptyPolls-1));
+      schedulePoll(document.hidden?1000:immediate?0:Date.now()<interactiveUntil?interactiveDelay:current()?.status==='running'?180:650);
     }
   }
   $('reconnect').onclick=async()=>{paused=false;$('notice').hidden=true;await poll();render();};

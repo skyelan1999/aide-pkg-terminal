@@ -5,7 +5,7 @@ function fixture(){
  const text=process.env.TERMINAL_SCHEDULER_BASELINE?require('node:child_process').execFileSync('git',['show','origin/main:src/workbench.js'],{encoding:'utf8'}):fs.readFileSync('src/workbench.js','utf8');
  const start=text.includes('  const requests =')?text.indexOf('  const requests ='):text.indexOf('  function enqueue(');
  const calls=[],gates=[];let inFlight=0,maxInFlight=0;
- const ctx={queueMicrotask,stopped:false,connected:true,queue:Promise.resolve(),bridge:{call:async(tool,args)=>{
+ const ctx={queueMicrotask,stopped:false,connected:true,inputReadback:false,panes:new Map(),queue:Promise.resolve(),bridge:{call:async(tool,args)=>{
   inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);assert.equal(inFlight,1);
   calls.push({tool,args});try{return await new Promise((resolve,reject)=>gates.push({resolve:value=>resolve({status:'result',result:value}),reject}));}finally{inFlight--;}
  }}};
