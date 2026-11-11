@@ -82,7 +82,15 @@ def client(raw, context, key):
         def target_to_client():
             try:
                 while not done.is_set():
-                    try: data=target.read(65536) if kind=='serial' else target.recv(65535)
+                    try:
+                        if kind=='serial':
+                            # Block for arrival, not for a 64 KiB buffer to fill.
+                            # Drain only bytes already queued; preserve idle blocking.
+                            data=target.read(1)
+                            if data:
+                                queued=min(target.in_waiting,65535)
+                                if queued: data+=target.read(queued)
+                        else: data=target.recv(65535)
                     except socket.timeout: continue
                     if not data:
                         if kind=='serial': continue

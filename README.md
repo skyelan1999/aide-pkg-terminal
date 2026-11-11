@@ -1,6 +1,14 @@
 # Terminal · Aide 设备终端工作台
 
-**1.8.0；实际发行状态以 GitHub Release 为准。** 图形窗口需要同步构建的 Aide 宿主（内含 viewer ticket 代理与 xvfb/x11vnc/openbox/websockify）；在旧宿主上 SSH 仍可用，但不会出现图形窗口。基础功能仍兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**1.8.1；实际发行状态以 GitHub Release 为准。** 图形窗口需要同步构建的 Aide 宿主（内含 viewer ticket 代理与 xvfb/x11vnc/openbox/websockify）；在旧宿主上 SSH 仍可用，但不会出现图形窗口。基础功能仍兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+
+## 中继交互性能（1.8.1）
+
+- SSH/Telnet 短输入可附 `offset`，确认响应在最多32毫秒的有界窗口内顺带返回实际收到的增量输出；长粘贴和旧客户端保留原发送行为，不伪造本地回显。
+- 输入与普通输出拉取共用偏移，重复/重叠片段去重；活动空轮询按8/16/32/40毫秒退避，后台和空闲仍降低频率，行号栏一帧最多更新一次。
+- 输入仍串行，结果不明不自动重发。新旧 daemon 通过 `capabilities.inputReadback` 协商兼容；没有改变认证、主机指纹或会话可见性规则。
+- 设备侧串口脚本改为等待首字节后读取已经到达的余量，去除64KiB读缓冲引入的0.5秒延迟。已有远端脚本需要重新下载并由使用者部署；仅更新本地插件不会替换远端脚本。
+- 当前验证使用本地 Aide 和回环TLS/虚拟串口夹具，不能据此承诺用户WAN、真实串口或所有设备的延迟。详见 `docs/verification/relay-performance-20261111.md`。
 
 ## 安装与兼容
 

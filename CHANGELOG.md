@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.1（发行状态以 GitHub Release 为准）
+
+- SSH/Telnet 输入确认可有界携带真实输出，避免小回显的额外拉取；动态偏移与重叠去重保证不重复显示。
+- 交互空轮询改为8/16/32/40ms退避，行号/时间戳渲染逐帧合并；保留单飞、有序输入、后台退避和不明写入不重发。
+- 串口中继读取首字节后只排空已到达数据，修复固定约500ms等待；TLS认证与UDP帧边界不变。
+- 新增输入回读、可见性重查、超时不伪造回显、调度与串口延迟回归；实测范围见性能记录。
+
 ## 1.8.0（发行状态以 GitHub Release 为准）
 
 - 新增 MobaXterm 式开箱即用图形窗口：SSH 会话自动分配受管 Xvfb display、私有 Xauthority、openbox、仅 loopback 的 x11vnc 与 websockify，并在 Workbench 内自动打开 noVNC 面板（#42 第一阶段）。

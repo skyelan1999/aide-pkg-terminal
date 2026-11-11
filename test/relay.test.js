@@ -29,7 +29,7 @@ test('SSH retains original kind and verifies device host key through encrypted r
  const ssh=new Server({hostKeys:[host]},client=>{clients.add(client);client.on('error',()=>{});client.on('close',()=>clients.delete(client));client.on('authentication',ctx=>ctx.method==='password'&&ctx.password==='relay-fixture'?ctx.accept():ctx.reject(['password']));client.on('ready',()=>client.on('session',accept=>{const session=accept();session.on('pty',accept=>accept());session.on('shell',accept=>{const stream=accept();stream.write('RELAY_SSH_READY\r\n');stream.on('data',data=>stream.write('ECHO:'+data));});}));});await new Promise(r=>ssh.listen(0,'127.0.0.1',r));t.after(()=>{for(const c of clients)c.end();ssh.close();});
  const f=await fixture(t,'ssh',{host:'127.0.0.1',port:ssh.address().port,username:'device',auth:'password'});await f.start();await f.m.relayConnect(f.ui,{id:f.rec.id});
  let offset=0;const output=()=>Buffer.from(f.m.poll(f.ui,{id:f.rec.id,offset}).output.data,'base64').toString();async function until(pattern){for(let i=0;i<200;i++){if(pattern.test(output()))return;await wait(25);}throw Error('SSH output timeout '+pattern+' '+output());}
- await until(/authenticity|fingerprint/);f.m.send(f.ui,{id:f.rec.id,data:'yes\r'});await until(/password/i);f.m.send(f.ui,{id:f.rec.id,data:'relay-fixture\r'});await until(/RELAY_SSH_READY/);assert.equal(f.m.list(f.ui).sessions[0].kind,'ssh');assert(!output().includes(f.key));await f.m.close(f.ui,{id:f.rec.id});offset=f.m.poll(f.ui,{id:f.rec.id}).output.offset;assert.equal((await f.m.reconnect(f.ui,{id:f.rec.id})).session.id,f.rec.id);await until(/password/i);f.m.send(f.ui,{id:f.rec.id,data:'relay-fixture\r'});await until(/RELAY_SSH_READY/);assert.equal(f.m.list(f.ui).sessions.length,1);await f.m.close(f.ui,{id:f.rec.id});
+ await until(/authenticity|fingerprint/);f.m.send(f.ui,{id:f.rec.id,data:'yes\r'});await until(/password/i);f.m.send(f.ui,{id:f.rec.id,data:'relay-fixture\r'});await until(/RELAY_SSH_READY/);const beforeReadback=f.m.poll(f.ui,{id:f.rec.id,offset:0}).output.offset;const readback=await f.m.send(f.ui,{id:f.rec.id,data:'READBACK_SSH',offset:beforeReadback});assert.equal(readback.output.id,f.rec.id);assert(readback.output.offset>=beforeReadback);await until(/ECHO:READBACK_SSH/);assert.equal(f.m.list(f.ui).sessions[0].kind,'ssh');assert(!output().includes(f.key));await f.m.close(f.ui,{id:f.rec.id});offset=f.m.poll(f.ui,{id:f.rec.id}).output.offset;assert.equal((await f.m.reconnect(f.ui,{id:f.rec.id})).session.id,f.rec.id);await until(/password/i);f.m.send(f.ui,{id:f.rec.id,data:'relay-fixture\r'});await until(/RELAY_SSH_READY/);assert.equal(f.m.list(f.ui).sessions.length,1);await f.m.close(f.ui,{id:f.rec.id});
 });
 test('hidden visibility persists across restart and prevents direct control or privilege spoofing',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'relay-visibility-')),state=fs.mkdtempSync(path.join(os.tmpdir(),'relay-visibility-state-')),ui={storageRoot:root,stateRoot:state,workbench:true},ai={...ui,workbench:false};let m=new Sessions();t.after(async()=>{await m.stop();fs.rmSync(root,{recursive:true,force:true});fs.rmSync(state,{recursive:true,force:true});});
@@ -45,4 +45,30 @@ test('relay server rejects missing authentication without opening the configured
 });
 test('downloaded script treats quotes and replacement markers as literal configuration data',()=>{
  const {spawnSync}=require('node:child_process'),root=fs.mkdtempSync(path.join(os.tmpdir(),'relay-config-data-'));try{const config={id:'fixture',kind:'serial',devicePath:"COM3-$&-$'-quote\"",key:crypto.randomBytes(32).toString('base64')};const file=path.join(root,'relay.py');fs.writeFileSync(file,relay.script(config));const result=spawnSync('python3',['-c','import runpy,json,sys;print(json.dumps(runpy.run_path(sys.argv[1])["CONFIG"]))',file],{encoding:'utf8',timeout:5000});assert.equal(result.status,0,result.stderr);assert.deepEqual(JSON.parse(result.stdout),config);}finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('serial relay forwards small replies promptly without waiting for a full read buffer', {timeout:10000}, async t=>{
+ const {SerialPort}=require('serialport');
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'relay-serial-latency-')),manager=new Sessions();
+ t.after(async()=>{await manager.stop();fs.rmSync(root,{recursive:true,force:true});});
+ const pair=await manager.commCall(root,{action:'serial_virtual_create'});
+ const echo=new SerialPort({path:pair.slavePath,baudRate:115200});
+ await new Promise((resolve,reject)=>{echo.once('open',resolve);echo.once('error',reject);});
+ echo.on('error',()=>{});echo.on('data',data=>echo.write(data));
+ t.after(()=>new Promise(resolve=>echo.isOpen?echo.close(resolve):resolve()));
+ const f=await fixture(t,'serial',{devicePath:pair.masterPath,baudRate:115200});await f.start();
+ const socket=await relay.open(f.config());socket.on('error',()=>{});t.after(()=>socket.destroy());
+ let pending=Buffer.alloc(0),reader=null;
+ socket.on('data',data=>{pending=Buffer.concat([pending,data]);if(reader&&pending.length>=reader.size){const r=reader;reader=null;clearTimeout(r.timer);const data=pending.subarray(0,r.size);pending=pending.subarray(r.size);r.resolve(data);}});
+ socket.resume();
+ const receive=size=>new Promise((resolve,reject)=>{reader={size,resolve,reject,timer:setTimeout(()=>{reader=null;reject(Error('serial echo timeout'));},2000)};});
+ const times=[];
+ // Binary, tiny and larger replies must all preserve bytes and be sent on first arrival.
+ for(const size of [1,3,32,257,4096]){
+  const sent=crypto.randomBytes(size),reply=receive(size),start=performance.now();socket.write(sent);
+  assert.deepEqual(await reply,sent);times.push(performance.now()-start);
+ }
+ const sorted=[...times].sort((a,b)=>a-b),p50=sorted[Math.floor(sorted.length/2)],max=Math.max(...times);
+ console.log(JSON.stringify({serialRelayEchoMs:times.map(n=>Number(n.toFixed(2))),p50:Number(p50.toFixed(2)),max:Number(max.toFixed(2))}));
+ assert(p50<180,`serial relay buffers interactive replies: p50=${p50.toFixed(1)}ms`);
 });
