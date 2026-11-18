@@ -14,6 +14,6 @@ test('input readback and later polls render overlapping output exactly once and 
 test('dispatch captures latest consumed offset, stays single-flight and never retries an uncertain input',async()=>{
  const calls=[],writes=[],panes=new Map([['session',{offset:12}]]);
  let active=0,max=0;
- const box={panes,requests:{input:[{tool:'input',args:{id:'session',data:'x'},resolve:v=>writes.push(v),reject:e=>writes.push(e.message)}],normal:[]},dispatching:true,inputBurst:0,inputReadback:true,stopped:false,connected:true,bridge:{async call(tool,args){active++;max=Math.max(max,active);calls.push({tool,args});active--;throw Error('ack lost after acceptance');}},Error};
- vm.runInNewContext(productionFunction('dispatch')+';globalThis.run=dispatch;',box);await box.run();assert.equal(max,1);assert.equal(calls.length,1);assert.equal(calls[0].args.offset,12);assert.deepEqual(writes,['ack lost after acceptance']);
+ const box={panes,sessions:[{id:'session',relayEnabled:true}],requests:{input:[{tool:'input',args:{id:'session',data:'x'},resolve:v=>writes.push(v),reject:e=>writes.push(e.message)}],normal:[]},dispatching:true,inputBurst:0,inputReadback:true,inputReadbackFast:true,stopped:false,connected:true,bridge:{async call(tool,args){active++;max=Math.max(max,active);calls.push({tool,args});active--;throw Error('ack lost after acceptance');}},Error};
+ vm.runInNewContext(productionFunction('dispatch')+';globalThis.run=dispatch;',box);await box.run();assert.equal(max,1);assert.equal(calls.length,1);assert.equal(calls[0].args.offset,12);assert.equal(calls[0].args.waitForOutput,true);assert.deepEqual(writes,['ack lost after acceptance']);
 });

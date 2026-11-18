@@ -62,6 +62,14 @@ test('relay echo misses skip repeated waits and allow future readback attempts',
  assert(f.rec.readbackRetryAt>deadline);
  assert.equal(f.writes.length,3);
 });
+test('a spaced relay key can receive the actual echo in its original workbench response',async t=>{
+ const f=fixture(t,{echoDelay:64});
+ f.rec.relayEnabled=true;
+ const result=await f.manager.send(f.context,{id:f.rec.id,data:'x',offset:0,waitForOutput:true});
+ assert.equal(Buffer.from(result.output.data,'base64').toString(),'x');
+ assert.deepEqual(f.writes.map(bytes=>bytes.toString()),['x']);
+ assert.equal(f.rec.outputWaiters.size,0);
+});
 test('visibility is rechecked after async input before returning output',async t=>{
  const f=fixture(t,{echoDelay:null}),ai={...f.context,workbench:false};
  const result=f.manager.send(ai,{id:f.rec.id,data:'accepted only once',offset:0});f.rec.visibleToAide=false;

@@ -530,7 +530,10 @@ if (typeof module !== 'undefined') module.exports = AideTerminalRelayProfile;
           let args=job.args;
           if(job.tool==='input'&&inputReadback&&panes.has(args.id)){
             args={...args,offset:panes.get(args.id).offset};
-            if(job.skipReadbackWait&&inputReadbackFast)args.waitForOutput=false;
+            if(inputReadbackFast){
+              if(job.skipReadbackWait)args.waitForOutput=false;
+              else if(sessions.find(s=>s.id===args.id)?.relayEnabled)args.waitForOutput=true;
+            }
           }
           const reply=job.tool==='__viewer'?await bridge.viewer(args):await bridge.call('terminal_session_'+job.tool,args);
           if(reply.status!=='result')throw Error('操作未完成，请检查 Aide 中的待审批提案');
