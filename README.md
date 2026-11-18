@@ -1,6 +1,6 @@
 # Terminal · Aide 设备终端工作台
 
-**1.8.8 候选，实际发行状态以 GitHub Release 为准。** 图形窗口需要配套 Aide 宿主提供 viewer 代理与 Xvfb、x11vnc、openbox、websockify。基础功能兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织。
+**1.8.9 候选，实际发行状态以 GitHub Release 为准。** 图形窗口需要配套 Aide 宿主提供 viewer 代理与 Xvfb、x11vnc、openbox、websockify。基础功能兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织。
 
 ## 中继交互性能（1.8.1）
 
@@ -12,13 +12,22 @@
 
 ## 安装与兼容
 
-1.8.8 的版本归档位于 `packages/v1.8.8/aide-pkg-terminal-v1.8.8.zip`，同目录提供 `SHA256SUMS`。导入前校验 `sha256sum -c SHA256SUMS`，然后在 Aide 的已安装插件详情中选择 ZIP 升级。历史版本可从 [GitHub Releases](https://github.com/skyelan1999/aide-pkg-terminal/releases) 获取。
+1.8.9 的版本归档位于 `packages/v1.8.9/aide-pkg-terminal-v1.8.9.zip`，同目录提供 `SHA256SUMS`。导入前校验 `sha256sum -c SHA256SUMS`，然后在 Aide 的已安装插件详情中选择 ZIP 升级。历史版本可从 [GitHub Releases](https://github.com/skyelan1999/aide-pkg-terminal/releases) 获取。
 
 需要 **Aide v0.1.18.0-RC3+**。市场元数据最低版本为 `0.1.18.0 RC3`，不提供降低门槛的 sourceCompatibility；旧 RC1 不应自动升级至此版本。手动 ZIP 导入不经过市场门槛，请先升级宿主。运行时 `sessionCopyVersion=1` 仍作复制入口二次检查。归档不打包 xauth/X Server，部署前提见下方说明。历史1.5.3归档保持不变。
 
 插件新标签页入口已移除；后台会话、日志及 Aide 管理能力继续保留。宿主界面变更需要更新 Aide main 源码构建，单独升级插件不会替换宿主界面。
 
 ## 使用
+
+## 截图和录制 X11
+
+在启用内置 X Server 的 SSH 会话中打开「截图与录制」。可截取 PNG，或录制无音频的 WebM。采集在 Aide 运行环境中进行，关掉图形窗口后仍可继续。同一宿主最多同时运行两项采集。录像可手动停止，默认 30 秒，最长 120 秒，每段最多 15 MiB；先到达的上限会结束本段。录制使用最高 1120×840 的画面和每秒最多 8 帧。
+
+采集结果保存在当前工作区的 Terminal 私有数据区。在最近采集列表点「保存」后，点击 Aide 顶部的保存按钮导出。删除会话会同时删除私有采集记录。配套 Linux Aide 容器提供 Pillow 的 XCB 和 WebP 支持，无需配置系统录屏权限。
+
+Aide 可按授权可见的会话调用 `terminal_session_capture`，包括 `screenshot`、`start`、`stop`、`status` 和 `list`。`screenshot` 和 `start` 需要提供采集目的。截图可交给支持图片的模型。视频在工作台保存。
+
 
 直连和中继 SSH 的「自动启用图形窗口」都为会话分配独立、带认证的 X Server，支持 RViz 等 OpenGL 应用。远端应用可以访问该会话的专用画面，请核对 SSH 主机指纹。外部 DISPLAY 和自定义 Xauthority 继续使用受限转发。剪贴板需手动复制或粘贴。
 
