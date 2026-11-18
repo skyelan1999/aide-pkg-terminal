@@ -1,6 +1,6 @@
 # Terminal · Aide 设备终端工作台
 
-**1.8.3；实际发行状态以 GitHub Release 为准。** 图形窗口需要同步构建的 Aide 宿主（内含 viewer ticket 代理与 xvfb/x11vnc/openbox/websockify）；在旧宿主上 SSH 仍可用，但不会出现图形窗口。基础功能仍兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**1.8.4 候选；实际发行状态以 GitHub Release 为准。** 图形窗口需要同步构建的 Aide 宿主（内含 viewer ticket 代理与 xvfb/x11vnc/openbox/websockify）；在旧宿主上 SSH 仍可用，但不会出现图形窗口。基础功能仍兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
 
 ## 中继交互性能（1.8.1）
 
@@ -12,7 +12,7 @@
 
 ## 安装与兼容
 
-1.8.3 的版本归档位于 `packages/v1.8.3/aide-pkg-terminal-v1.8.3.zip`，同目录提供 `SHA256SUMS`。导入前校验 `sha256sum -c SHA256SUMS`，然后在 Aide 的已安装插件详情中选择 ZIP 升级。已发布的 1.8.1 可从其 [GitHub Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.8.1) 获取。
+1.8.4 的版本归档位于 `packages/v1.8.4/aide-pkg-terminal-v1.8.4.zip`，同目录提供 `SHA256SUMS`。导入前校验 `sha256sum -c SHA256SUMS`，然后在 Aide 的已安装插件详情中选择 ZIP 升级。已发布的 1.8.1 可从其 [GitHub Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.8.1) 获取。
 
 需要 **Aide v0.1.18.0-RC3+**。市场元数据最低版本为 `0.1.18.0 RC3`，不提供降低门槛的 sourceCompatibility；旧 RC1 不应自动升级至此版本。手动 ZIP 导入不经过市场门槛，请先升级宿主。运行时 `sessionCopyVersion=1` 仍作复制入口二次检查。归档不打包 xauth/X Server，部署前提见下方说明。历史1.5.3归档保持不变。
 
@@ -21,6 +21,8 @@
 ## 使用
 
 直连 SSH 的「自动启用图形窗口」会在 Aide 中为该会话单独分配带认证的 X Server。RViz 等 OpenGL 应用在远端正常启动后会显示在 Terminal 的图形窗口中。请核对 SSH 主机指纹并连接可信设备，远端应用可以访问该会话的专用图形画面。剪贴板需手动复制或粘贴。使用外部 DISPLAY 或中继时仍使用受限 X11 转发。
+
+连接后可从工具栏点击「图形窗口」。支持独立窗口的 Aide 会直接打开新窗口。旧版 Aide 或浏览器拦截弹窗时，画面在终端旁边显示，窄屏采用上下排列。两种方式都可以继续使用终端输入。
 
 已结束、中断或连接失败的会话，可在顶部点击 **重新连接**。沿用原会话 ID、名称、目标、认证方式、私钥引用、中继配置、日志开关和对 Aide 的可见性，继续保留历史日志；密码/私钥口令仍需在终端重新输入。重新连接会创建新的远端连接或 Shell，不恢复上次 Shell 内存状态，也不自动重放旧命令。运行中禁用此按钮，连接失败后可再次手动重试。
 
