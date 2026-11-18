@@ -1,6 +1,7 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net'),crypto=require('node:crypto');
 const {Server}=require('ssh2'),{prepareX11}=require('../x11');
+const {Sessions}=require('../sessions');
 const {workspace,relayFor,until,wait}=require('./session-feature-fixture');
 const cookie='0123456789abcdef0123456789abcdef';
 function xauthFixture(root){const bin=path.join(root,'bin');fs.mkdirSync(bin);const executable=path.join(bin,'xauth');fs.writeFileSync(executable,"#!/bin/sh\nprintf 'fixture/unix:0 MIT-MAGIC-COOKIE-1 "+cookie+"\\n'\n",{mode:0o700});fs.writeFileSync(path.join(root,'Xauthority'),'synthetic fixture only',{mode:0o600});return bin;}
@@ -16,6 +17,70 @@ test('X11 preflight requires explicit SSH, valid DISPLAY, executable xauth and b
     const outside=path.join(os.tmpdir(),'terminal-x11-outside-'+crypto.randomBytes(8).toString('hex'));fs.writeFileSync(outside,'secret');fs.symlinkSync(outside,path.join(root,'escape'));try{assert.throws(()=>prepareX11({...args,x11AuthorityFile:'escape'},root,env),/escapes/);}finally{fs.rmSync(outside);}
     assert.throws(()=>prepareX11(args,root,{PATH:'',HOME:root}),/xauth/);
   }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+test('only a direct workbench SSH session can use trusted forwarding to its allocated display', async t=>{
+  const f=workspace(t),bin=xauthFixture(f.root),previous=process.env.PATH;
+  process.env.PATH=bin+path.delimiter+previous;
+  t.after(()=>{process.env.PATH=previous;});
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'aide-terminal-x11-test-'));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const authority=path.join(directory,'Xauthority');
+  fs.writeFileSync(authority,'synthetic fixture only',{mode:0o600});
+  const original=f.m.xservers;
+  let starts=0,stops=0,available=true;
+  f.m.xservers={
+    start:async()=>{starts++;if(!available)throw Error('fixture missing Xvfb');return {serverId:'x-test',display:':90',status:'running'};},
+    authorityFile:()=>authority,
+    stop:async()=>{stops++;},
+    stopAll:()=>original.stopAll(),
+  };
+  const request={kind:'ssh',x11Enabled:true,x11Trusted:true,managedX11Authority:'/forged',managedX11ServerId:'fake'};
+  const direct={};
+  const graphics=await f.m.openSessionX11({root:f.root},direct,request,f.ui);
+  assert.deepEqual(graphics.argv.slice(0,3),['-Y','-o','ForwardX11Trusted=yes']);
+  assert.deepEqual(graphics.env,{DISPLAY:':90',XAUTHORITY:authority});
+  assert.equal(direct.x11Display,undefined);
+  assert.equal(direct.x11ManagedServerId,'x-test');
+  await f.m.releaseManagedX11(direct);
+  assert.equal(stops,1);
+  assert.equal(direct.x11Trusted,undefined);
+  assert.equal((await f.m.openSessionX11({root:f.root},{},request,{...f.ui,workbench:false})).argv[0],'-X');
+  assert.equal((await f.m.openSessionX11({root:f.root},{relayEnabled:true},request,f.ui)).argv[0],'-X');
+  const external={...request,x11Display:':9',x11AuthorityFile:'Xauthority'};
+  const realRoot=fs.realpathSync(f.root);
+  const untrusted=await f.m.openSessionX11({root:realRoot},{},external,f.ui);
+  assert.equal(untrusted.argv[0],'-X');
+  assert.equal(untrusted.env.XAUTHORITY,path.join(realRoot,'Xauthority'));
+  assert.equal(starts,3);
+  available=false;
+  const failed={};
+  assert.deepEqual(await f.m.openSessionX11({root:f.root},failed,request,f.ui),{argv:[],env:{}});
+  assert.equal(failed.x11Unavailable,'fixture missing Xvfb');
+  assert.equal(failed.x11Trusted,undefined);
+  assert.equal(failed.x11Enabled,true);
+  assert.deepEqual(await f.m.openSessionX11({root:f.root},{},{...request,x11Enabled:false},f.ui),{argv:[],env:{}});
+});
+test('legacy managed credentials are discarded while saved external settings and copies are preserved', async t=>{
+  const f=workspace(t),space=f.m.space(f.ui);
+  const managed={id:'a'.repeat(24),name:'managed',kind:'ssh',status:'exited',x11Enabled:true,
+    x11Display:':90',x11AuthorityFile:'/tmp/aide-terminal-x11-old/Xauthority',x11ViewerPort:5990};
+  const external={...managed,id:'b'.repeat(24),name:'external',x11Display:':7',x11AuthorityFile:'keys/Xauthority',x11ViewerPort:undefined};
+  for(const row of [managed,external])fs.writeFileSync(path.join(space.dir,row.id+'.json'),JSON.stringify(row),{mode:0o600});
+  const revived=new Sessions();
+  t.after(()=>revived.stop());
+  let [a,b]=revived.list(f.ui).sessions;
+  assert.equal(a.x11Enabled,true);
+  assert.equal(a.x11Display,undefined);
+  assert.equal(a.x11AuthorityFile,undefined);
+  assert.equal(a.x11ViewerPort,undefined);
+  assert.equal(b.x11Display,':7');
+  assert.equal(b.x11AuthorityFile,'keys/Xauthority');
+  const copied=await revived.create(f.ui,{copyFrom:a.id,connect:false});
+  assert.equal(copied.session.x11Enabled,true);
+  assert.equal(copied.session.x11Display,undefined);
+  const disk=JSON.parse(fs.readFileSync(path.join(space.dir,a.id+'.json'),'utf8'));
+  assert.equal(disk.x11AuthorityFile,undefined);
+  assert.equal(disk.x11Trusted,undefined);
 });
 function setup(info,invalid=false){const protocol=Buffer.from(info.protocol),auth=Buffer.from(invalid?'f'.repeat(String(info.cookie).length):String(info.cookie),'hex'),header=Buffer.alloc(12);header[0]=108;header.writeUInt16LE(11,2);header.writeUInt16LE(protocol.length,6);header.writeUInt16LE(auth.length,8);return Buffer.concat([header,protocol,Buffer.alloc((4-protocol.length%4)%4),auth,Buffer.alloc((4-auth.length%4)%4)]);}
 async function xEndpoint(t){

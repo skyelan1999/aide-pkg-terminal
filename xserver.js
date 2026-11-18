@@ -147,7 +147,10 @@ class XServers {
     child.once('exit', (code, signal) => { if (server.status === 'running' || server.status === 'starting') { server.status = 'exited'; server.exitCode = code; server.exitSignal = signal; } this.cleanup(server); });
     await new Promise(resolve => setTimeout(resolve, 300));
     if (server.status === 'starting') server.status = 'running';
-    if (server.status === 'error') throw Error(server.error || 'Xvfb 启动失败');
+    if (server.status !== 'running') {
+      this.servers.delete(id);
+      throw Error(server.error || 'Xvfb 启动失败');
+    }
     if (args.viewer !== false) await this.attachViewer(server);
     return this.public(server);
   }
