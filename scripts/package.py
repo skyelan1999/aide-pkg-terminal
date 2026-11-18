@@ -13,7 +13,7 @@ args = parser.parse_args()
 manifest = json.loads((root / 'manifest.json').read_text())
 names = ['index.js', 'sessions.js', 'telnet.js', 'x11.js', 'xserver.js', 'pty-worker.py', 'manifest.json', 'workbench.html', 'README.md', 'LICENSE']
 names += ['vendor/novnc.js']
-names += ['package.json', 'relay/client.js', 'relay/agent.py']
+names += ['package.json', 'relay/client.js', 'relay/agent.py', 'relay/profile.js']
 names += [str(p.relative_to(root)) for p in (root/'communications').glob('*.js')]
 names += [str(p.relative_to(root)) for p in (root / 'vendor').glob('*-LICENSE')]
 names += json.loads(subprocess.check_output(['node',str(root/'scripts/runtime-files.cjs')],text=True))

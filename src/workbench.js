@@ -4,6 +4,7 @@
   const panes = new Map(), pendingInput = new Map();
   let sessionFilter = 'all', workspaceMode = 'local';
   let sessions = [], selected = null, polling = false, paused = true, connected = false, stopped = false, exportId = 0, relayConnecting = false, sessionReconnecting = false, sessionCopyCapable=false, copying=false;
+  let relayExportSession = null;
   let pollTimer = null, pollRequested = false, interactiveUntil = 0, emptyPolls = 0, inputReadback = false;
   function schedulePoll(delay = 0) {
     clearTimeout(pollTimer);pollTimer=null;
@@ -143,7 +144,8 @@
     $('detail-state').style.color=running?'var(--positive)':'var(--muted)';
     $('detail-kind').textContent=rec?(kinds[rec.kind]||rec.kind)+(rec.x11Enabled?' / X11 已请求':rec.x11Unavailable?' / X11 不可用':'')+(rec.copiedFrom?' / 副本':'')+(rec.relayEnabled?' · 中继模式':''):'—';
     $('session-visible').disabled=!rec||paused;$('session-visible').checked=!!rec&&rec.visibleToAide!==false;
-    $('relay-actions').hidden=!rec?.relayEnabled;$('relay-online').textContent=rec?.relayEnabled?'中继 '+(rec.relayOnline==='online'?'在线':rec.relayOnline==='offline'?'离线':'状态未知')+' · '+rec.relayEndpoint:'';for(const id of ['relay-probe','relay-script','relay-connect'])$(id).disabled=!rec||paused||(id==='relay-connect'&&(running||relayConnecting));
+    $('relay-export-status').hidden = !rec || relayExportSession !== rec.id;
+    $('relay-actions').hidden=!rec?.relayEnabled;$('relay-online').textContent=rec?.relayEnabled?'中继 '+(rec.relayOnline==='online'?'在线':rec.relayOnline==='offline'?'离线':'状态未知')+' · '+rec.relayEndpoint:'';for(const id of ['relay-probe','relay-script','relay-export','relay-connect'])$(id).disabled=!rec||paused||(id==='relay-connect'&&(running||relayConnecting));
     $('detail-endpoint').textContent=rec?endpoint(rec):'—';
     $('detail-cwd').textContent=rec?.cwd||'—';
     const created=rec?.createdAt?new Date(rec.createdAt):null;
@@ -267,7 +269,71 @@
   function openCreate(){syncRelay();if($('kind').value==='serial')refreshSerial();$('create-error').textContent='';$('create-dialog').showModal();$('create-form').elements.name.focus();}
   for(const id of ['new-session','new-top','new-empty'])$(id).onclick=openCreate;
   $('cancel-create').onclick=()=>$('create-dialog').close();
-  $('create-dialog').addEventListener('close',()=>{$('create-form').elements.relayKey.value='';});
+  let relayImportGeneration = 0, relayProfileLoaded = false;
+  $('create-dialog').addEventListener('close', () => {
+    relayImportGeneration++;
+    relayProfileLoaded = false;
+    $('create-form').elements.relayKey.value = '';
+    $('relay-import-file').value = '';
+    $('relay-import-status').hidden = true;
+  });
+  $('relay-import').onclick = () => $('relay-import-file').click();
+  $('relay-import-file').onchange = async event => {
+    const generation = ++relayImportGeneration;
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const pending = () => generation === relayImportGeneration && $('create-dialog').open && !paused;
+    try {
+      if (!file.size || file.size > AideTerminalRelayProfile.maxBytes) throw Error('中继配置文件为空或超过 16 KiB');
+      const profile = AideTerminalRelayProfile.decode(await file.text());
+      if (!pending()) return;
+      const form = $('create-form'), fields = form.elements, target = profile.target;
+      const set = (name, value) => { fields[name].value = String(value); };
+      relayProfileLoaded = true;
+      $('relay-enabled').checked = true;
+      $('kind').value = profile.kind;
+      $('kind').onchange();
+      set('name', profile.name);
+      set('cwd', profile.cwd || '.');
+      set('relayHost', profile.relay.host);
+      set('relayPort', profile.relay.port);
+      set('relayKey', profile.relay.key);
+      fields.logging.checked = profile.logging;
+      fields.visibleToAide.checked = profile.visibleToAide;
+      if (profile.kind === 'serial') {
+        for (const name of ['devicePath', 'baudRate', 'dataBits', 'stopBits', 'parity']) set(name, target[name]);
+        fields.flowControl.checked = target.flowControl;
+      } else if (profile.kind === 'ssh') {
+        for (const name of ['host', 'port', 'username', 'auth', 'x11Display', 'x11AuthorityFile']) set(name, target[name]);
+        $('auth').onchange();
+        set('identityFile', target.identityFile || '');
+        const source = $('identity-source');
+        const sourceId = target.identitySource || '';
+        if (![...source.options].some(option => option.value === sourceId)) {
+          const option = document.createElement('option');
+          option.value = sourceId;
+          option.textContent = '备份引用来源 · ' + sourceId;
+          source.append(option);
+        }
+        source.value = sourceId;
+        fields.x11Enabled.checked = target.x11Enabled;
+        $('x11-enabled').onchange();
+      } else {
+        set('networkHost', target.host);
+        set('networkPort', target.port);
+        if (profile.kind === 'telnet') {
+          set('terminalType', target.terminalType);
+          fields.telnetLocalEcho.checked = target.telnetLocalEcho;
+        }
+      }
+      $('create-error').textContent = '';
+      $('relay-import-status').textContent = '中继配置已加载。保存后选择“连接中继”，可继续使用已部署的脚本。';
+      $('relay-import-status').hidden = false;
+    } catch (error) {
+      if (pending()) $('create-error').textContent = error.message;
+    }
+  };
   $('auth').onchange=()=>{$('identity-fields').hidden=$('auth').value!=='key';};
   let keySource='', keyDirectory='.', keyPickerTarget='create';
   async function loadKeys(source='',directory='.') {
@@ -293,7 +359,7 @@
   }
   $('kind').onchange=()=>{const kind=$('kind').value,ssh=kind==='ssh';$('ssh-fields').hidden=!ssh;$('network-fields').hidden=!['telnet','tcp','tcp-server','udp'].includes(kind);$('serial-fields').hidden=kind!=='serial';$('udp-bind-field').hidden=kind!=='udp';for(const name of ['host','username'])$('create-form').elements[name].required=ssh;$('create-form').elements.networkHost.disabled=kind==='tcp-server';$('telnet-fields').hidden=kind!=='telnet';$('x11-fields').hidden=!ssh;$('create-form').elements.x11Enabled.disabled=!ssh;syncRelay();syncSerialSelection();if(kind==='telnet'&&Number($('create-form').elements.networkPort.value)===0)$('create-form').elements.networkPort.value='23';if(kind==='serial')refreshSerial();};
   const directHints={network:$('network-hint').textContent,serial:$('serial-hint').textContent,ssh:$('ssh-hint').textContent};
-  function syncRelay(){const allowed=['ssh','telnet','tcp','udp','serial'].includes($('kind').value);$('relay-enabled').disabled=!allowed;if(!allowed)$('relay-enabled').checked=false;const enabled=$('relay-enabled').checked;$('relay-fields').hidden=!enabled;$('cwd-field').hidden=enabled;$('udp-bind-field').hidden=enabled||$('kind').value!=='udp';$('network-hint').textContent=enabled?'目标主机和端口由中继电脑访问；本端到中继通过加密 TCP 连接。':directHints.network;$('serial-hint').textContent=enabled?'填写中继电脑上的串口路径；设备侧脚本需要 pyserial，本端无需映射该设备。':directHints.serial;$('ssh-hint').textContent=enabled?'目标由中继访问；SSH 主机指纹核验、密码和私钥认证仍在本端完成，凭据不写入部署脚本。':directHints.ssh;for(const name of ['relayHost','relayPort','relayKey']){$('create-form').elements[name].disabled=!enabled;$('create-form').elements[name].required=enabled&&name!=='relayKey';}$('create-submit').textContent=enabled?'保存并部署中继':'创建并连接';syncSerialSelection();}
+  function syncRelay(){const allowed=['ssh','telnet','tcp','udp','serial'].includes($('kind').value);$('relay-enabled').disabled=!allowed;if(!allowed)$('relay-enabled').checked=false;const enabled=$('relay-enabled').checked;$('relay-fields').hidden=!enabled;$('cwd-field').hidden=enabled;$('udp-bind-field').hidden=enabled||$('kind').value!=='udp';$('network-hint').textContent=enabled?'目标主机和端口由中继电脑访问；本端到中继通过加密 TCP 连接。':directHints.network;$('serial-hint').textContent=enabled?'填写中继电脑上的串口路径；设备侧脚本需要 pyserial，本端无需映射该设备。':directHints.serial;$('ssh-hint').textContent=enabled?'目标由中继访问；SSH 主机指纹核验、密码和私钥认证仍在本端完成，凭据不写入部署脚本。':directHints.ssh;for(const name of ['relayHost','relayPort','relayKey']){$('create-form').elements[name].disabled=!enabled;$('create-form').elements[name].required=enabled&&name!=='relayKey';}$('create-submit').textContent=enabled?(relayProfileLoaded?'保存中继会话':'保存并部署中继'):'创建并连接';syncSerialSelection();}
   $('relay-enabled').onchange=()=>{syncRelay();if($('kind').value==='serial')refreshSerial();};
   $('refresh-serial').onclick=refreshSerial;
   $('send-format').onchange=()=>{$('send-ending').disabled=$('send-format').value==='hex';};
@@ -319,7 +385,7 @@
     if(args.kind==='ssh')Object.assign(args,{host:values.get('host'),port:Number(values.get('port')),username:values.get('username'),auth:values.get('auth'),identityFile:values.get('auth')==='key'?values.get('identityFile')||undefined:undefined,identitySource:values.get('auth')==='key'?values.get('identitySource')||'':undefined});
     if(args.kind==='ssh'&&form.elements.x11Enabled.checked)Object.assign(args,{x11Enabled:true,x11Display:values.get('x11Display')||undefined,x11AuthorityFile:values.get('x11AuthorityFile')||undefined});
     if(args.kind==='ssh'&&args.auth==='key'&&!args.identityFile){$('create-error').textContent='请选择私钥文件';return;}
-    if(args.kind==='telnet')args.telnetLocalEcho=form.elements.telnetLocalEcho.checked;
+    if(args.kind==='telnet'){args.terminalType=values.get('terminalType');args.telnetLocalEcho=form.elements.telnetLocalEcho.checked;}
     if(['telnet','tcp','tcp-server','udp'].includes(args.kind))Object.assign(args,{host:args.kind==='tcp-server'?'127.0.0.1':values.get('networkHost'),port:Number(values.get('networkPort')),bindPort:Number(values.get('bindPort'))});
     if(args.kind==='serial')Object.assign(args,{devicePath:$('serial-port-select').value==='__manual__'?values.get('devicePath'):$('serial-port-select').value,baudRate:Number(values.get('baudRate')),dataBits:Number(values.get('dataBits')),stopBits:Number(values.get('stopBits')),parity:values.get('parity'),flowControl:form.elements.flowControl.checked});
     if($('relay-enabled').checked)args.relay={enabled:true,host:values.get('relayHost'),port:Number(values.get('relayPort')),key:values.get('relayKey')||undefined};
@@ -360,7 +426,25 @@
   $('copy-independent-ssh').onclick=()=>{const rec=sessions.find(s=>s.id===copySource);if(!rec||rec.kind!=='workspace')return;$('copy-dialog').close();$('kind').value='ssh';$('relay-enabled').checked=false;$('kind').onchange();const f=$('create-form');f.elements.name.value=rec.name.slice(0,65)+' SSH';f.elements.host.value=rec.host||'';f.elements.port.value=String(rec.port||22);f.elements.username.value=rec.username||'';$('auth').value='password';$('auth').onchange();f.elements.identityFile.value='';f.elements.x11Enabled.checked=true;$('x11-enabled').onchange();openCreate();message('独立 SSH 需要重新认证，不复用工作区 master 或复制其凭据；已默认启用 Aide 内置图形窗口。');};
   $('relay-probe').onclick=async()=>{const rec=current();if(!rec?.relayEnabled)return;$('relay-probe').disabled=true;try{const result=await enqueue('relay_status',{id:rec.id});Object.assign(rec,result.session);render();}catch(error){fail(error);}finally{$('relay-probe').disabled=false;}};
   $('relay-connect').onclick=async()=>{const rec=current();if(!rec?.relayEnabled||relayConnecting)return;relayConnecting=true;$('relay-connect').disabled=true;try{const result=await enqueue('relay_connect',{id:rec.id,identityFile:rec.identityFile,identitySource:rec.identitySource});Object.assign(rec,result.session);select(rec.id);}catch(error){message('中继连接失败：'+error.message);}finally{relayConnecting=false;render();}};
-  $('relay-script').onclick=async()=>{const rec=current();if(!rec?.relayEnabled)return;try{const result=await enqueue('relay_script',{id:rec.id});const output=bytes(result.data);window.parent.postMessage({type:'aide.workbench.export',protocol:1,pluginId:'terminal',requestId:'export_'+(++exportId),name:result.name,bytes:output.buffer},'*',[output.buffer]);}catch(error){fail(error);}};
+  async function exportRelay(format) {
+    const rec = current();
+    if (!rec?.relayEnabled || paused) return;
+    try {
+      const result = await enqueue('relay_script', {id: rec.id, ...(format ? {format} : {})});
+      if (paused || current()?.id !== rec.id) return;
+      const output = bytes(result.data);
+      window.parent.postMessage({type: 'aide.workbench.export', protocol: 1, pluginId: 'terminal',
+        requestId: 'export_' + (++exportId), name: result.name, bytes: output.buffer}, '*', [output.buffer]);
+      relayExportSession = format === 'profile' ? rec.id : null;
+      const status = $('relay-export-status');
+      status.textContent = '请在 Aide 顶部保存。备份含中继密钥，请私下保管。';
+      status.hidden = relayExportSession === null;
+    } catch (error) {
+      fail(error);
+    }
+  }
+  $('relay-script').onclick = () => exportRelay();
+  $('relay-export').onclick = () => exportRelay('profile');
   setInterval(()=>{if(current()?.relayEnabled&&!sessionReconnecting&&!relayConnecting&&!sessions.some(rec=>rec.status==='running')&&!paused&&!$('relay-probe').disabled)$('relay-probe').click();},15000);
   function endpointParts(value) {
     const text=String(value||''), index=text.lastIndexOf(':');

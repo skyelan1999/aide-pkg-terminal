@@ -7,6 +7,7 @@ const readline = require('node:readline');
 const HISTORY = 512 * 1024, PAGE = 64 * 1024, MAX_SESSIONS = 32, MAX_ACTIVE = 16;
 const LOG_BYTES = 2 * 1024 * 1024, LOG_FILES = 4;
 const relay=require('./relay/client');
+const relayProfile=require('./relay/profile');
 const net=require('node:net');
 const {Telnet}=require('./telnet');
 const {prepareX11}=require('./x11');
@@ -384,7 +385,15 @@ class Sessions {
   relayScript(workspace,args){
     if(workspace?.workbench!==true)throw Error('中继部署脚本仅允许从工作台下载');
     const space=this.space(workspace),rec=this.get(space,args.id,workspace);if(!rec.relayEnabled)throw Error('此会话未启用中继');
-    const config=this.relayConfig(space,rec),script=relay.script({...config,...config.target});
+    const config=this.relayConfig(space,rec);
+    if (args.format === 'profile') {
+      const profile = relayProfile.fromRecord(rec, config);
+      const encoded = Buffer.from(JSON.stringify(profile), 'utf8').toString('base64') + '\n';
+      if (encoded.length > relayProfile.maxBytes) throw Error('中继配置超过备份大小限制');
+      return {name: 'aide-relay-' + rec.id + '.v1.base64', data: Buffer.from(encoded, 'ascii').toString('base64')};
+    }
+    if (args.format !== undefined && args.format !== 'deploy') throw Error('不支持的中继导出格式');
+    const script=relay.script({...config,...config.target});
     return {name:'aide-relay-'+rec.id+'.py',data:Buffer.from(script).toString('base64')};
   }
   visibility(workspace,args){
