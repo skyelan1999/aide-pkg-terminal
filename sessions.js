@@ -289,8 +289,9 @@ class Sessions {
     try{
       server=await this.xservers.start({width:args.x11Width,height:args.x11Height,viewer:true});
       if(server.status!=='running')throw Error('内置 X Server 未启动');
-      // Trust applies only to the workbench's direct SSH and its fresh private display.
-      const trusted=workspace?.workbench===true&&!rec.relayEnabled&&!args.x11AuthorityFile;
+      // The private per-session X server supports GLX for workbench SSH
+      // whether the authenticated SSH connection is direct or transported by TLS.
+      const trusted=workspace?.workbench===true&&!args.x11AuthorityFile;
       const x11=prepareX11(args,space.root,process.env,{
         display:server.display,authorityFile:this.xservers.authorityFile(server.serverId),trusted,
       });

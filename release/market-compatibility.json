@@ -1,6 +1,6 @@
 {
   "id": "terminal",
-  "version": "1.8.6",
+  "version": "1.8.7",
   "minAideVersion": "0.1.18.0 RC3",
   "features": [
     "terminal-workbench-v1",
@@ -8,8 +8,8 @@
     "terminal-communications-v1",
     "terminal-relay-v1"
   ],
-  "sourceArchive": "packages/v1.8.6/aide-pkg-terminal-v1.8.6.zip",
+  "sourceArchive": "packages/v1.8.7/aide-pkg-terminal-v1.8.7.zip",
   "status": "Release candidate; publication requires a public GitHub Release",
-  "sha256": "d3d8fa45986766d2c161e22f9ccf91524b585fbead610e4255ab2797737fb6d0",
-  "bytes": 1309849
+  "sha256": "ecb756868c03a37cabc14e0ff4267a662ff8663e8dabf0a033b84546b8451a8c",
+  "bytes": 1309813
 }

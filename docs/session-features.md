@@ -24,9 +24,9 @@ Telnet 使用 `terminal_tcp_connect` 连接禁用策略；连接后禁用 `termi
 
 ## SSH X11
 
-仅独立 SSH 设备会话及其 SSH-over-relay 支持显式 X11。采用 OpenSSH 非信任模式 `-X`、`ForwardX11Trusted=no`、20 分钟新连接超时；保留 SSH 主机校验，不自动切换到 `-Y`。工作区 master 复用终端不修改 master 的转发设置。服务端拒绝转发、非信任扩展不兼容等错误仍按 SSH 输出显示；「X11 已请求」不代表窗口已显示。
+仅独立 SSH 设备会话及其 SSH-over-relay 支持显式 X11。工作台可为直连和中继会话分别创建带认证的私有 X Server。该专用显示允许可信转发，以支持 RViz 等 GLX 应用。工作区 master 复用终端沿用 master 的转发设置。
 
-前提：
+手动指定外部 DISPLAY 或 Xauthority 时使用 OpenSSH 受限模式 `-X`、`ForwardX11Trusted=no`，新连接超时为 20 分钟。外部显示需要满足以下条件。
 
 1. 用户已有运行中的真实 X Server，且 Aide 运行环境可以到达其 DISPLAY；不自动安装 XQuartz、不自动开放监听或修改防火墙。
 2. Aide 运行环境有可执行的 `xauth`，并有对应 DISPLAY 的有效 MIT-MAGIC-COOKIE-1 Xauthority 条目。预检缺失时明确拒绝，不退回无认证。cookie 只在进程内验证，不返回网页/模型或写日志。

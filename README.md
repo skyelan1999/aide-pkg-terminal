@@ -1,6 +1,6 @@
 # Terminal · Aide 设备终端工作台
 
-**1.8.6 候选；实际发行状态以 GitHub Release 为准。** 图形窗口需要同步构建的 Aide 宿主（内含 viewer ticket 代理与 xvfb/x11vnc/openbox/websockify）；在旧宿主上 SSH 仍可用，但不会出现图形窗口。基础功能仍兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**1.8.7 候选，实际发行状态以 GitHub Release 为准。** 图形窗口需要配套 Aide 宿主提供 viewer 代理与 Xvfb、x11vnc、openbox、websockify。基础功能兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织。
 
 ## 中继交互性能（1.8.1）
 
@@ -20,7 +20,7 @@
 
 ## 使用
 
-直连 SSH 的「自动启用图形窗口」会在 Aide 中为该会话单独分配带认证的 X Server。RViz 等 OpenGL 应用在远端正常启动后会显示在 Terminal 的图形窗口中。请核对 SSH 主机指纹并连接可信设备，远端应用可以访问该会话的专用图形画面。剪贴板需手动复制或粘贴。使用外部 DISPLAY 或中继时仍使用受限 X11 转发。
+直连和中继 SSH 的「自动启用图形窗口」都为会话分配独立、带认证的 X Server，支持 RViz 等 OpenGL 应用。远端应用可以访问该会话的专用画面，请核对 SSH 主机指纹。外部 DISPLAY 和自定义 Xauthority 继续使用受限转发。剪贴板需手动复制或粘贴。
 
 连接后可从工具栏点击「图形窗口」。支持独立窗口的 Aide 会直接打开新窗口。旧版 Aide 或浏览器拦截弹窗时，画面在终端旁边显示，窄屏采用上下排列。两种方式都可以继续使用终端输入。
 

@@ -18,7 +18,7 @@ test('X11 preflight requires explicit SSH, valid DISPLAY, executable xauth and b
     assert.throws(()=>prepareX11(args,root,{PATH:'',HOME:root}),/xauth/);
   }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
-test('only a direct workbench SSH session can use trusted forwarding to its allocated display', async t=>{
+test('direct and relayed workbench SSH can use trusted forwarding only to their managed display', async t=>{
   const f=workspace(t),bin=xauthFixture(f.root),previous=process.env.PATH;
   process.env.PATH=bin+path.delimiter+previous;
   t.after(()=>{process.env.PATH=previous;});
@@ -45,13 +45,18 @@ test('only a direct workbench SSH session can use trusted forwarding to its allo
   assert.equal(stops,1);
   assert.equal(direct.x11Trusted,undefined);
   assert.equal((await f.m.openSessionX11({root:f.root},{},request,{...f.ui,workbench:false})).argv[0],'-X');
-  assert.equal((await f.m.openSessionX11({root:f.root},{relayEnabled:true},request,f.ui)).argv[0],'-X');
+  const relayed={relayEnabled:true};
+  const relayedGraphics=await f.m.openSessionX11({root:f.root},relayed,request,f.ui);
+  assert.deepEqual(relayedGraphics.argv.slice(0,3),['-Y','-o','ForwardX11Trusted=yes']);
+  assert.equal(relayed.x11Trusted,true);
   const external={...request,x11Display:':9',x11AuthorityFile:'Xauthority'};
   const realRoot=fs.realpathSync(f.root);
-  const untrusted=await f.m.openSessionX11({root:realRoot},{},external,f.ui);
+  const untrusted=await f.m.openSessionX11({root:realRoot},{relayEnabled:true},external,f.ui);
   assert.equal(untrusted.argv[0],'-X');
   assert.equal(untrusted.env.XAUTHORITY,path.join(realRoot,'Xauthority'));
-  assert.equal(starts,3);
+  const customAuthority=await f.m.openSessionX11({root:realRoot},{relayEnabled:true},{...request,x11AuthorityFile:'Xauthority'},f.ui);
+  assert.equal(customAuthority.argv[0],'-X');
+  assert.equal(starts,4);
   available=false;
   const failed={};
   assert.deepEqual(await f.m.openSessionX11({root:f.root},failed,request,f.ui),{argv:[],env:{}});
