@@ -24,6 +24,7 @@ function hostPage(mode) {
 <iframe title="Terminal test frame" sandbox="allow-scripts allow-downloads" src="/workbench"></iframe>
 <script>
 const mode=${JSON.stringify(mode)}, sessions=${JSON.stringify(fixtureSessions)}, frame=document.querySelector('iframe');
+const sharedWindow=mode?.startsWith('shared-');
 window.received={viewer:[],input:[],inputArgs:[],polls:[],outputStarts:[],outputStops:[]};
 window.addEventListener('message',event=>{
   if(event.source!==frame.contentWindow||event.data?.type!=='aide.workbench.ready')return;
@@ -32,15 +33,23 @@ window.addEventListener('message',event=>{
   channel.port1.onmessage=e=>{
     const {requestId,method,tool,arguments:args}=e.data;
     const result={};
-    if(method==='viewer.open'){
-      window.received.viewer.push(args);
-      if(mode==='popup'&&args.openInWindow===true){
+    if(method==='viewer.open'||method==='window.open'){
+      window.received.viewer.push({method,args});
+      const sharedCall=method==='window.open';
+      const wantsPopup=sharedCall ? mode==='shared-popup'&&args.view==='graphics' : mode==='popup'&&args.openInWindow===true;
+      if(wantsPopup){
         window.activated=navigator.userActivation.isActive;
         const popup=window.open('about:blank','_blank','popup,width=900,height=650');
         if(popup){popup.opener=null;popup.location=${JSON.stringify(windowPath)};result.windowOpened=true;}
       }
-      if(mode==='blocked')result.windowOpened=false;
-      result.protocol=1;result.url=${JSON.stringify(socketPath)};
+      result.protocol=1;
+      if(sharedCall){
+        result.windowOpened=result.windowOpened===true;
+        if(!result.windowOpened)result.fallbackUrl=mode==='shared-invalid'?'/plugin-viewer/short/websockify':${JSON.stringify(socketPath)};
+      }else{
+        if(mode==='blocked')result.windowOpened=false;
+        result.url=${JSON.stringify(socketPath)};
+      }
     } else if(method==='terminal.output.start'){
       window.received.outputStarts.push(args);
       if(mode==='push'&&window.received.outputStarts.length===1){
@@ -63,7 +72,8 @@ window.addEventListener('message',event=>{
     channel.port1.postMessage({requestId,status:'result',result});
   };
   frame.contentWindow.postMessage({type:'aide.workbench.connect',protocol:1,pluginId:'terminal',
-    capabilities:['bridge.renew','daemon.detach',...(mode==='legacy'?[]:['viewer.window']),...(mode==='push'?['terminal.output']:[])],
+    capabilities:['bridge.renew','daemon.detach',...(mode==='legacy'?[]:['viewer.window']),
+      ...(sharedWindow?['window.open']:[]),...(mode==='push'?['terminal.output']:[])],
     tools:['terminal_session_poll','terminal_session_input','terminal_session_resize']
   },'*',[channel.port2]);
 },{once:false});
@@ -165,7 +175,8 @@ async function verifyMode(browser,base,mode,sockets) {
     await frame.locator('#detail-state').filter({hasText:'运行中'}).waitFor();
     assert.equal(await pane.isVisible(),false,'initial X11 session leaves viewer closed');
     assert.deepEqual(await page.evaluate(()=>window.received.viewer),[]);
-    const popupPromise=mode==='popup'?page.waitForEvent('popup',{timeout:4000}):null;
+    const popupMode=mode==='popup'||mode==='shared-popup';
+    const popupPromise=popupMode?page.waitForEvent('popup',{timeout:4000}):null;
     await button.click();
     if(popupPromise){
       const popup=await popupPromise;
@@ -190,6 +201,12 @@ async function verifyMode(browser,base,mode,sockets) {
       await popup.locator('#viewer-close').click().catch(error=>{if(!popup.isClosed())throw error;});
       await closed;
       assert.equal(await frame.locator('#terminal-area').isVisible(),true);
+      await frame.locator('#terminal .terminal-pane:not([hidden]) .xterm-helper-textarea').press('x');
+      await page.waitForFunction(()=>window.received.input.join('').includes('x'));
+    } else if(mode==='shared-invalid'){
+      await frame.locator('#notice span').filter({hasText:'图形窗口地址无效'}).waitFor();
+      assert.equal(await pane.isVisible(),false,'invalid fallback leaves no graph pane open');
+      assert.equal(sockets.clients.size,0,'invalid fallback creates no viewer connection');
     } else {
       try { await pane.waitFor(); } catch (error) {
         const notice=await frame.locator('#notice span').textContent();
@@ -219,9 +236,10 @@ async function verifyMode(browser,base,mode,sockets) {
       await pane.locator('#graphical-close').click();
       assert.equal(await pane.isVisible(),false);
     }
-    assert.deepEqual(await page.evaluate(()=>window.received.viewer),[
-      mode==='legacy'?{port:5701}:{port:5701,openInWindow:true},
-    ]);
+    const expected = mode.startsWith('shared-')
+      ? {method:'window.open',args:{view:'graphics',viewerPort:5701}}
+      : {method:'viewer.open',args:mode==='legacy'?{port:5701}:{port:5701,openInWindow:true}};
+    assert.deepEqual(await page.evaluate(()=>window.received.viewer),[expected]);
     assert.deepEqual(errors,[]);
     console.log('PASS: '+mode+' viewer');
   } finally { await context.close(); }
@@ -294,7 +312,9 @@ async function verifyOutputPush(browser, base) {
   const browser=await chromium.launch({headless:true});
   try {
     const base='http://127.0.0.1:'+server.address().port;
-    for(const mode of ['legacy','popup','blocked'])await verifyMode(browser,base,mode,sockets);
+    for(const mode of ['legacy','popup','blocked','shared-popup','shared-blocked','shared-invalid']){
+      await verifyMode(browser,base,mode,sockets);
+    }
     await verifyOutputPush(browser,base);
   } finally {
     await browser.close();
