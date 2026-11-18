@@ -57,7 +57,7 @@
             }
           }
           let reply;
-          if(job.tool==='__viewer') reply=await bridge.viewer(args);
+          if(job.tool==='__viewer') reply=await (sharedWindow ? bridge.openWindow(args) : bridge.viewer(args));
           else if(job.tool==='__outputStart'){
             const watch=outputWatch;
             if(!watch || watch.subscription!==args.subscription || paused){job.resolve(null);continue;}
@@ -264,7 +264,7 @@
     $('log-status').style.color=rec?.logError?'var(--danger)':'';
     let displayChanged=false;for(const [id,pane] of panes){const prefs=prefsFor(id),signature=prefs.lineNumbers+':'+prefs.timestamps;if(pane.displaySignature!==signature){applyDisplayPrefs(id,pane);if(id===selected)displayChanged=true;}pane.element.hidden=id!==selected;pane.term.options.disableStdin=paused||sessions.find(s=>s.id===id)?.status!=='running';}if(displayChanged)requestAnimationFrame(fitSelected);
   }
-  let graphicalView = null, openingGraphical = false, graphicalRequest = 0, viewerWindow = false;
+  let graphicalView = null, openingGraphical = false, graphicalRequest = 0, viewerWindow = false, sharedWindow = false;
   const viewerSession = (id,port) => sessions.some(row=>row.id===id&&row.status==='running'&&row.x11ViewerPort===port);
   function closeGraphical() {
     graphicalRequest++;
@@ -284,9 +284,10 @@
     openingGraphical=true;
     $('graphical').disabled=true;
     try {
-      const granted = await enqueueViewer(viewerWindow?{port,openInWindow:true}:{port});
+      const args = sharedWindow ? {view:'graphics',viewerPort:port} : (viewerWindow ? {port,openInWindow:true} : {port});
+      const granted = await enqueueViewer(args);
       if(request!==graphicalRequest||!viewerSession(rec.id,port))return;
-      if(granted?.protocol!==1)throw Error('图形窗口响应无效');
+      if(granted?.protocol!==1||(sharedWindow&&typeof granted.windowOpened!=='boolean'))throw Error('图形窗口响应无效');
       closeGraphical();
       if(granted.windowOpened===true)return;
       const pane=$('graphical-pane');
@@ -295,7 +296,7 @@
       pane.parentElement.classList.add('graphical-visible');
       $('graphical-title').textContent=rec.name;
       $('graphical-title').title=rec.name;
-      const disconnect=AideTerminalViewer.connect(granted.url,{
+      const disconnect=AideTerminalViewer.connect(sharedWindow?granted.fallbackUrl:granted.url,{
         screen:$('graphical-screen'),state:$('graphical-state'),copy:$('graphical-copy'),
       });
       graphicalView={id:rec.id,port,disconnect};
@@ -672,6 +673,7 @@
   render();bridge.connect().then(info=>{
     if(!['bridge.renew','daemon.detach'].every(x=>info.capabilities?.includes(x)))throw Error('请先更新 Aide：此工作台需要支持通信续期和常驻会话分离的宿主版本。');
     viewerWindow=info.capabilities.includes('viewer.window');
+    sharedWindow=info.capabilities.includes('window.open');
     outputPush=info.capabilities.includes('terminal.output');
     connected=true;paused=false;render();return poll();
   }).catch(error=>{paused=true;render();fail(error);});

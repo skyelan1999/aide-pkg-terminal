@@ -365,7 +365,8 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
   window.addEventListener('message',receive);
   function connect(){if(closed)return Promise.reject(Error('Client closed'));if(port)return Promise.resolve({protocol:1,tools:tools.slice(),capabilities:capabilities.slice()});if(!connecting){connecting=new Promise((resolve,reject)=>{settle={resolve,reject,timer:setTimeout(()=>revoke('Host bridge unavailable'),10000)};});window.parent.postMessage({type:'aide.workbench.ready',protocol:1,requestIds:'monotonic'},'*');}return connecting;}
   async function request(method,body){await connect();if(closed||!port)throw Error('Bridge closed');if(pending.size)throw Error('A call is already pending');const requestId='r_'+(++next);return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(requestId);reject(Error('Reply timeout; outcome uncertain, do not automatically retry'));},320000);pending.set(requestId,{resolve,reject,timer});try{port.postMessage({protocol:1,requestId,method,...body});}catch(e){pending.delete(requestId);clearTimeout(timer);reject(e);}});}
-  return {connect,async call(tool,args={},attachments=[]){await connect();if(!tools.includes(tool))throw Error('Tool not declared by this workbench');return request('tool.call',{tool,arguments:args,attachments});},viewer:args=>request('viewer.open',{arguments:args}),startTerminalOutput:args=>request('terminal.output.start',{arguments:args}),stopTerminalOutput:args=>request('terminal.output.stop',{arguments:args}),proposalStatus:proposalId=>request('proposal.status',{proposalId}),onEvent(fn){listeners.add(fn);return()=>listeners.delete(fn);},close(){revoke('Client closed; verify effects before retry');}};
+  const openWindow = args => request('window.open', {arguments:args});
+  return {connect,async call(tool,args={},attachments=[]){await connect();if(!tools.includes(tool))throw Error('Tool not declared by this workbench');return request('tool.call',{tool,arguments:args,attachments});},viewer:args=>request('viewer.open',{arguments:args}),openWindow,startTerminalOutput:args=>request('terminal.output.start',{arguments:args}),stopTerminalOutput:args=>request('terminal.output.stop',{arguments:args}),proposalStatus:proposalId=>request('proposal.status',{proposalId}),onEvent(fn){listeners.add(fn);return()=>listeners.delete(fn);},close(){revoke('Client closed; verify effects before retry');}};
  }
  window.AideWorkbenchClient={create};
 })();
@@ -537,7 +538,7 @@ if (typeof module !== 'undefined') module.exports = AideTerminalRelayProfile;
             }
           }
           let reply;
-          if(job.tool==='__viewer') reply=await bridge.viewer(args);
+          if(job.tool==='__viewer') reply=await (sharedWindow ? bridge.openWindow(args) : bridge.viewer(args));
           else if(job.tool==='__outputStart'){
             const watch=outputWatch;
             if(!watch || watch.subscription!==args.subscription || paused){job.resolve(null);continue;}
@@ -744,7 +745,7 @@ if (typeof module !== 'undefined') module.exports = AideTerminalRelayProfile;
     $('log-status').style.color=rec?.logError?'var(--danger)':'';
     let displayChanged=false;for(const [id,pane] of panes){const prefs=prefsFor(id),signature=prefs.lineNumbers+':'+prefs.timestamps;if(pane.displaySignature!==signature){applyDisplayPrefs(id,pane);if(id===selected)displayChanged=true;}pane.element.hidden=id!==selected;pane.term.options.disableStdin=paused||sessions.find(s=>s.id===id)?.status!=='running';}if(displayChanged)requestAnimationFrame(fitSelected);
   }
-  let graphicalView = null, openingGraphical = false, graphicalRequest = 0, viewerWindow = false;
+  let graphicalView = null, openingGraphical = false, graphicalRequest = 0, viewerWindow = false, sharedWindow = false;
   const viewerSession = (id,port) => sessions.some(row=>row.id===id&&row.status==='running'&&row.x11ViewerPort===port);
   function closeGraphical() {
     graphicalRequest++;
@@ -764,9 +765,10 @@ if (typeof module !== 'undefined') module.exports = AideTerminalRelayProfile;
     openingGraphical=true;
     $('graphical').disabled=true;
     try {
-      const granted = await enqueueViewer(viewerWindow?{port,openInWindow:true}:{port});
+      const args = sharedWindow ? {view:'graphics',viewerPort:port} : (viewerWindow ? {port,openInWindow:true} : {port});
+      const granted = await enqueueViewer(args);
       if(request!==graphicalRequest||!viewerSession(rec.id,port))return;
-      if(granted?.protocol!==1)throw Error('图形窗口响应无效');
+      if(granted?.protocol!==1||(sharedWindow&&typeof granted.windowOpened!=='boolean'))throw Error('图形窗口响应无效');
       closeGraphical();
       if(granted.windowOpened===true)return;
       const pane=$('graphical-pane');
@@ -775,7 +777,7 @@ if (typeof module !== 'undefined') module.exports = AideTerminalRelayProfile;
       pane.parentElement.classList.add('graphical-visible');
       $('graphical-title').textContent=rec.name;
       $('graphical-title').title=rec.name;
-      const disconnect=AideTerminalViewer.connect(granted.url,{
+      const disconnect=AideTerminalViewer.connect(sharedWindow?granted.fallbackUrl:granted.url,{
         screen:$('graphical-screen'),state:$('graphical-state'),copy:$('graphical-copy'),
       });
       graphicalView={id:rec.id,port,disconnect};
@@ -1152,6 +1154,7 @@ if (typeof module !== 'undefined') module.exports = AideTerminalRelayProfile;
   render();bridge.connect().then(info=>{
     if(!['bridge.renew','daemon.detach'].every(x=>info.capabilities?.includes(x)))throw Error('请先更新 Aide：此工作台需要支持通信续期和常驻会话分离的宿主版本。');
     viewerWindow=info.capabilities.includes('viewer.window');
+    sharedWindow=info.capabilities.includes('window.open');
     outputPush=info.capabilities.includes('terminal.output');
     connected=true;paused=false;render();return poll();
   }).catch(error=>{paused=true;render();fail(error);});
