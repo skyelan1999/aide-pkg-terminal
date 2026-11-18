@@ -24,7 +24,7 @@
     return copied;
   }
 
-  function connect(path, {screen, state, copy}) {
+  function connect(path, {screen, state, copy, clearOnDisconnect=false}) {
     const url = socketURL(path);
     if (typeof AideTerminalRFB !== 'function') throw Error('图形组件未加载，请重新打开工作台');
     let clipboard = '', connected = true;
@@ -49,6 +49,7 @@
     client.addEventListener('disconnect', event => {
       if (!connected) return;
       clear();
+      if (clearOnDisconnect) screen.replaceChildren();
       state.textContent = event.detail?.clean === false ? '图形窗口连接中断' : '图形窗口已断开';
     });
     client.addEventListener('clipboard', event => {

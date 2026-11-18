@@ -9,6 +9,7 @@
       screen: document.getElementById('viewer-screen'),
       state,
       copy: document.getElementById('viewer-copy'),
+      clearOnDisconnect: true,
     });
     window.addEventListener('pagehide', disconnect, {once:true});
   } catch (error) {

@@ -94,7 +94,7 @@ async function verifyCanvas(locator) {
   throw Error('The synthetic RFB frame was not drawn');
 }
 
-async function verifyMode(browser,base,mode) {
+async function verifyMode(browser,base,mode,sockets) {
   const context=await browser.newContext({viewport:{width:1440,height:960}});
   try {
     await context.addInitScript(() => {
@@ -126,6 +126,10 @@ async function verifyMode(browser,base,mode) {
       assert.deepEqual(await popup.evaluate(()=>window.copyWrites),[],'remote clipboard is not written automatically');
       await popup.locator('#viewer-copy').click();
       assert.deepEqual(await popup.evaluate(()=>window.copyWrites),['Synthetic clipboard']);
+      for(const socket of sockets.clients)socket.close(1000);
+      await popup.locator('#viewer-state').filter({hasText:/已断开|连接中断/}).waitFor();
+      assert.equal(await popup.locator('#viewer-screen canvas').count(),0,'disconnected window clears its framebuffer');
+      assert.equal(await popup.locator('#viewer-copy').isVisible(),false,'disconnected window clears its clipboard controls');
       const closed=popup.waitForEvent('close');
       await popup.locator('#viewer-close').click().catch(error=>{if(!popup.isClosed())throw error;});
       await closed;
@@ -182,7 +186,7 @@ async function verifyMode(browser,base,mode) {
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const browser=await chromium.launch({headless:true});
   try {
-    for(const mode of ['legacy','popup','blocked'])await verifyMode(browser,'http://127.0.0.1:'+server.address().port,mode);
+    for(const mode of ['legacy','popup','blocked'])await verifyMode(browser,'http://127.0.0.1:'+server.address().port,mode,sockets);
   } finally {
     await browser.close();
     for(const socket of sockets.clients)socket.terminate();
