@@ -1,6 +1,6 @@
 # Terminal · Aide 设备终端工作台
 
-**1.8.1；实际发行状态以 GitHub Release 为准。** 图形窗口需要同步构建的 Aide 宿主（内含 viewer ticket 代理与 xvfb/x11vnc/openbox/websockify）；在旧宿主上 SSH 仍可用，但不会出现图形窗口。基础功能仍兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**1.8.2 候选；实际发行状态以 GitHub Release 为准。** 图形窗口需要同步构建的 Aide 宿主（内含 viewer ticket 代理与 xvfb/x11vnc/openbox/websockify）；在旧宿主上 SSH 仍可用，但不会出现图形窗口。基础功能仍兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
 
 ## 中继交互性能（1.8.1）
 
@@ -12,7 +12,7 @@
 
 ## 安装与兼容
 
-以 [v1.8.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.8.0) 是否公开为发行状态依据。正式归档位于 `packages/v1.8.0/aide-pkg-terminal-v1.8.0.zip` 和同目录 `SHA256SUMS`；发布后从 Release 说明的固定提交链接下载，校验 `sha256sum -c SHA256SUMS` 后导入。仅出现仓库文件或本段说明不表示已公开发行。
+1.8.2 的版本归档位于 `packages/v1.8.2/aide-pkg-terminal-v1.8.2.zip`，同目录提供 `SHA256SUMS`。导入前校验 `sha256sum -c SHA256SUMS`，然后在 Aide 的已安装插件详情中选择 ZIP 升级。已发布的 1.8.1 可从其 [GitHub Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.8.1) 获取。
 
 需要 **Aide v0.1.18.0-RC3+**。市场元数据最低版本为 `0.1.18.0 RC3`，不提供降低门槛的 sourceCompatibility；旧 RC1 不应自动升级至此版本。手动 ZIP 导入不经过市场门槛，请先升级宿主。运行时 `sessionCopyVersion=1` 仍作复制入口二次检查。归档不打包 xauth/X Server，部署前提见下方说明。历史1.5.3归档保持不变。
 

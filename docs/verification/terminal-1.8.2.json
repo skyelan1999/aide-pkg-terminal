@@ -1,0 +1,42 @@
+{
+  "version": "1.8.2",
+  "date": "2026-11-18",
+  "stage": "versioned candidate",
+  "package": {
+    "file": "packages/v1.8.2/aide-pkg-terminal-v1.8.2.zip",
+    "bytes": 1235140,
+    "sha256": "12df165850cafb025fc77cf78d5e3785a23fee9e76c684ea90713cfed9c962b3"
+  },
+  "testHostImage": "sha256:fdce63a38acc0bd961bc1d2b4f979eac0331dc0a1cd7f57a1134b3ace5405972",
+  "hostUpgrade": {
+    "knownGoodVersion": "1.8.1",
+    "knownGoodSHA256": "fc42c5a33f4ba440340fa25956aeed6c8b5b3b1561f477f8126064b6b1da5bc3",
+    "status": "PASS",
+    "checks": [
+      "official release installed by authenticated Aide upload",
+      "actual Aide workbench and download control with original deployed Python TLS relay",
+      "Aide ZIP upgrade retained install date, enablement and settings",
+      "existing session, private relay configuration and log bytes preserved",
+      "current Aide session can reconnect to the unchanged Python TLS relay",
+      "Aide profile download kept key in file content only",
+      "new session restored after old one was deleted and relayed bidirectional binary bytes"
+    ],
+    "browserErrors": []
+  },
+  "sourceRuntime": {
+    "platform": "Linux ARM64",
+    "passed": 76,
+    "failed": 0,
+    "skipped": 1,
+    "skipReason": "isolated network has no non-loopback IPv4 interface"
+  },
+  "extractedRuntime": {
+    "platform": "Linux ARM64",
+    "passed": 71,
+    "failed": 0,
+    "skipped": 1,
+    "skipReason": "isolated network has no non-loopback IPv4 interface"
+  },
+  "legacyPackagePreserved": true,
+  "scope": "Synthetic TCP endpoint and existing Python TLS relay on a disposable Aide host. SSH, Telnet, UDP and serial connection fields exercise backup round trips in the source suite. No customer host, serial hardware or normal Aide instance used."
+}
