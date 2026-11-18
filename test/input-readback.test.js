@@ -62,8 +62,52 @@ test('relay echo misses skip repeated waits and allow future readback attempts',
  assert(f.rec.readbackRetryAt>deadline);
  assert.equal(f.writes.length,3);
 });
+test('a spaced relay key can receive the actual echo in its original workbench response',async t=>{
+ const f=fixture(t,{echoDelay:64});
+ f.rec.relayEnabled=true;
+ const result=await f.manager.send(f.context,{id:f.rec.id,data:'x',offset:0,waitForOutput:true});
+ assert.equal(Buffer.from(result.output.data,'base64').toString(),'x');
+ assert.deepEqual(f.writes.map(bytes=>bytes.toString()),['x']);
+ assert.equal(f.rec.outputWaiters.size,0);
+});
 test('visibility is rechecked after async input before returning output',async t=>{
  const f=fixture(t,{echoDelay:null}),ai={...f.context,workbench:false};
  const result=f.manager.send(ai,{id:f.rec.id,data:'accepted only once',offset:0});f.rec.visibleToAide=false;
  await assert.rejects(result,/不存在/);assert.equal(f.writes.length,1);assert.equal(f.rec.outputWaiters.size,0);
+});
+test('private relay watch waits for actual bytes without opening or changing storage',async t=>{
+ const f=fixture(t,{echoDelay:null}),watch={...f.context,outputWatch:true};
+ f.rec.relayEnabled=true;
+ f.manager.space=()=>assert.fail('watch must use only an initialized in-memory workspace');
+ f.manager.persist=()=>assert.fail('watch must never persist a record');
+ const pending=f.manager.poll(watch,{id:f.rec.id,offset:0,outputWatch:true});
+ assert.equal(f.rec.outputWaiters.size,1);
+ f.manager.output(f.space,f.rec,Buffer.from('远端回显'));
+ const result=await pending;
+ assert.deepEqual(Object.keys(result),['output']);
+ assert.equal(Buffer.from(result.output.data,'base64').toString(),'远端回显');
+ assert.equal(result.output.offset,Buffer.byteLength('远端回显'));
+ assert.equal(f.rec.outputWaiters.size,0);
+ assert.equal(f.writes.length,0);
+ const start=performance.now();
+ const timeout=await f.manager.poll(watch,{id:f.rec.id,offset:result.output.offset,outputWatch:true});
+ assert(performance.now()-start<600);
+ assert.equal(timeout.output.data,'');
+ assert.equal(timeout.output.offset,result.output.offset);
+ assert.equal(f.rec.outputWaiters.size,0);
+});
+test('relay watch rejects other modes and a worker replaced while waiting',async t=>{
+ const f=fixture(t,{echoDelay:null}),watch={...f.context,outputWatch:true};
+ const args={id:f.rec.id,offset:0,outputWatch:true};
+ await assert.rejects(f.manager.poll(f.context,args),/未获授权/);
+ await assert.rejects(f.manager.poll({...watch,workbench:false},args),/未获授权/);
+ await assert.rejects(f.manager.poll({...watch,stateRoot:f.context.stateRoot+'/unopened'},args),/回显不可用/);
+ await assert.rejects(f.manager.poll(watch,args),/回显不可用/);
+ f.rec.relayEnabled=true;
+ await assert.rejects(f.manager.poll(watch,{...args,offset:'0'}),/offset/);
+ const pending=f.manager.poll(watch,args);
+ f.rec.worker={};
+ f.manager.output(f.space,f.rec,Buffer.from('new worker'));
+ await assert.rejects(pending,/回显不可用/);
+ assert.equal(f.rec.outputWaiters.size,0);
 });

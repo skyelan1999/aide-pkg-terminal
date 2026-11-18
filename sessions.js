@@ -6,7 +6,17 @@ const {spawn} = require('node:child_process');
 const readline = require('node:readline');
 const HISTORY = 512 * 1024, PAGE = 64 * 1024, MAX_SESSIONS = 32, MAX_ACTIVE = 16;
 const LOG_BYTES = 2 * 1024 * 1024, LOG_FILES = 4;
-const ECHO_WAIT_MS = 32, RELAY_ECHO_RETRY_MS = 1500;
+const ECHO_WAIT_MS = 32, RELAY_WORKBENCH_ECHO_WAIT_MS = 96, RELAY_ECHO_RETRY_MS = 1500;
+const OUTPUT_WATCH_MS = 200, MAX_OUTPUT_WAITS = 8;
+
+function waitForOutput(rec, delay) {
+  return new Promise(resolve => {
+    rec.outputWaiters ||= new Set();
+    const ready = () => { clearTimeout(timer); rec.outputWaiters.delete(ready); resolve(); };
+    const timer = setTimeout(ready, delay);
+    rec.outputWaiters.add(ready);
+  });
+}
 const relay=require('./relay/client');
 const relayProfile=require('./relay/profile');
 const net=require('node:net');
@@ -35,7 +45,10 @@ function privateDir(dir, protect = true) {
 }
 function writePrivate(file, data, append = false) {
   const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW | (append ? fs.constants.O_APPEND : fs.constants.O_TRUNC), 0o600);
-  try { fs.fchmodSync(fd, 0o600); fs.writeFileSync(fd, data); } finally { fs.closeSync(fd); }
+  try {
+    if (!append || (fs.fstatSync(fd).mode & 0o7777) !== 0o600) fs.fchmodSync(fd, 0o600);
+    fs.writeFileSync(fd, data);
+  } finally { fs.closeSync(fd); }
 }
 function readPrivate(file) {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -152,8 +165,7 @@ class Sessions {
     if (typeof id !== 'string' || !ID.test(id) || !space.records.has(id)) throw Error('此工作区中不存在该会话');
     const rec=space.records.get(id);if(workspace?.workbench!==true&&rec.visibleToAide===false)throw Error('此工作区中不存在该会话');return rec;
   }
-  list(workspace) {
-    const space = this.space(workspace);
+  list(workspace, space = this.space(workspace)) {
     return {capabilities:{inputReadback:true,inputReadbackFast:true,sessionCopy:workspace?.sessionCopyVersion===1},workspace:{mode:space.remote?'ssh':'local',host:space.remote?.host,path:space.remote?.path},sessions:[...space.records.values()].filter(rec=>workspace?.workbench===true||rec.visibleToAide!==false).map(rec => this.public(rec)), storage:workspace?.stateRoot?'Aide 私有会话存储（按工作区隔离）':space.remote?'Aide 数据目录 / terminal-workspaces/<工作区标识>/.aide/terminal-workbench':'.aide/terminal-workbench', limits:{sessions:MAX_SESSIONS,active:MAX_ACTIVE,logBytes:LOG_BYTES,logFiles:LOG_FILES}};
   }
   async create(workspace, args, existing) {
@@ -549,45 +561,46 @@ class Sessions {
   }
   send(workspace, args) {
     if (args.waitForOutput !== undefined && typeof args.waitForOutput !== 'boolean') throw Error('waitForOutput must be boolean');
-    if (args.offset !== undefined) {
-      // Validate before any input can execute. A readback failure must never
-      // turn invalid parameters into a partly accepted write.
-      if (!Number.isSafeInteger(args.offset) || args.offset < 0) throw Error('offset must be a non-negative safe integer');
-      const requested = args.offset;
-      const rec = this.get(this.space(workspace), args.id, workspace);
-      return this.sendWithOutput(workspace, rec, args, requested);
+    // Validate before any input can execute. A readback failure must never
+    // turn invalid parameters into a partly accepted write.
+    const requested = args.offset;
+    if (requested !== undefined && (!Number.isSafeInteger(requested) || requested < 0)) {
+      throw Error('offset must be a non-negative safe integer');
     }
-    return this.sendInput(workspace, args);
+    const space = this.space(workspace);
+    const rec = this.get(space, args.id, workspace);
+    if (requested !== undefined) {
+      return this.sendWithOutput(workspace, space, rec, args, requested);
+    }
+    return this.sendInput(space, rec, args);
   }
-  async sendWithOutput(workspace, rec, args, requested) {
+  async sendWithOutput(workspace, space, rec, args, requested) {
     const worker=rec.worker;
-    const result = await this.sendInput(workspace, args);
+    const result = await this.sendInput(space, rec, args);
     // One short bounded wait may return a remote echo in the input ACK,
     // removing a second host RPC. Never wait on bulk paste or communication
     // packets, and never infer an echo from the bytes we just sent.
     if (args.waitForOutput !== false && !(rec.relayEnabled&&rec.readbackRetryAt>Date.now()) &&
         ['local','workspace','ssh','telnet'].includes(rec.kind) &&
         Buffer.byteLength(args.data) <= 256 && rec.offset === requested && !this.stopping) {
-      await new Promise(resolve => {
-        rec.outputWaiters ||= new Set();
-        const ready = () => { clearTimeout(timer); rec.outputWaiters.delete(ready); resolve(); };
-        const timer = setTimeout(ready, ECHO_WAIT_MS);
-        rec.outputWaiters.add(ready);
-      });
+      // Only the workbench can request a longer wait for a spaced relay key.
+      // Fast typing still sends immediately and may collect already-ready output.
+      const echoWait = rec.relayEnabled && workspace?.workbench === true && args.waitForOutput === true
+        ? RELAY_WORKBENCH_ECHO_WAIT_MS : ECHO_WAIT_MS;
+      await waitForOutput(rec, echoWait);
       // A slower relay won't supply echo in this window. Keep dispatching
       // immediately for a short period instead of repeating that delay per key.
       if(rec.relayEnabled&&rec.worker===worker&&rec.offset===requested)rec.readbackRetryAt=Date.now()+RELAY_ECHO_RETRY_MS;
     }
     // A stale/invisible target must not expose output after an async write.
-    this.get(this.space(workspace), args.id, workspace);
+    this.get(space, args.id, workspace);
     return {...result, output:this.outputSince(rec, requested)};
   }
-  sendInput(workspace, args) {
-    const rec = this.get(this.space(workspace), args.id,workspace);
+  sendInput(space, rec, args) {
     if (!rec.worker || rec.status !== 'running') throw Error('会话已结束，创建新会话后重试');
-    if(rec.kind==='telnet')return this.sendTelnet(this.space(workspace),rec,args);
-    if(rec.relaySocket)return this.sendRelay(this.space(workspace),rec,args);
-    if(rec.transport)return this.sendCommunication(this.space(workspace),rec,args);
+    if(rec.kind==='telnet')return this.sendTelnet(space,rec,args);
+    if(rec.relaySocket)return this.sendRelay(space,rec,args);
+    if(rec.transport)return this.sendCommunication(space,rec,args);
     if (typeof args.data !== 'string' || Buffer.byteLength(args.data) > 16384) throw Error('单次输入不能超过16KiB');
     if (rec.worker.stdin.writableLength > 65536) throw Error('终端输入繁忙，请稍后重试');
     rec.worker.stdin.write(JSON.stringify({type:'input',data:Buffer.from(args.data).toString('base64')})+'\n');
@@ -602,10 +615,29 @@ class Sessions {
     return {session:this.public(rec)};
   }
   poll(workspace, args) {
+    if (args.outputWatch === true) return this.watchOutput(workspace, args);
     const space = this.space(workspace), rec = args.id ? this.get(space,args.id,workspace) : null;
-    if (!rec) return this.list(workspace);
+    if (!rec) return this.list(workspace, space);
     const requested = integer(args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
-    return {...this.list(workspace), output:this.outputSince(rec, requested)};
+    return {...this.list(workspace, space), output:this.outputSince(rec, requested)};
+  }
+  async watchOutput(workspace, args) {
+    if (workspace?.workbench !== true || workspace.outputWatch !== true) throw Error('图形工作台回显请求未获授权');
+    if (!Number.isSafeInteger(args.offset) || args.offset < 0) throw Error('offset must be a non-negative safe integer');
+    // A live session already owns an in-memory space. Reading its output must
+    // not initialize storage, migrate records, or load a different workspace.
+    const space = this.spaces.get(workspace.stateRoot);
+    if (!space || this.stopping) throw Error('会话回显不可用');
+    const rec = this.get(space, args.id, workspace);
+    if (rec.kind !== 'ssh' || !rec.relayEnabled || rec.status !== 'running' || !rec.worker) throw Error('会话回显不可用');
+    const worker = rec.worker;
+    if (rec.offset === args.offset) {
+      if ((rec.outputWaiters?.size || 0) >= MAX_OUTPUT_WAITS) throw Error('会话回显请求繁忙');
+      await waitForOutput(rec, OUTPUT_WATCH_MS);
+    }
+    if (this.stopping || this.get(space,args.id,workspace) !== rec ||
+        rec.worker !== worker || rec.status !== 'running' || !rec.relayEnabled) throw Error('会话回显不可用');
+    return {output:this.outputSince(rec, args.offset)};
   }
   outputSince(rec, requested) {
     const start = Math.max(rec.base, Math.min(requested,rec.offset)), end = Math.min(rec.offset,start+PAGE);

@@ -30,12 +30,10 @@
     let clipboard = '', connected = true;
     state.textContent = '正在连接图形窗口';
     copy.hidden = true;
-    const client = new AideTerminalRFB(screen, url, {
-      credentials: {password: ''},
-      scaleViewport: true,
-      clipViewport: false,
-      focusOnClick: true,
-    });
+    const client = new AideTerminalRFB(screen, url, {credentials: {password: ''}});
+    client.clipViewport = false;
+    client.scaleViewport = true;
+    client.focusOnClick = true;
     const clear = () => {
       connected = false;
       clipboard = '';

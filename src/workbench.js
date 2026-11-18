@@ -5,6 +5,7 @@
   let sessionFilter = 'all', workspaceMode = 'local';
   let sessions = [], selected = null, polling = false, paused = true, connected = false, stopped = false, exportId = 0, relayConnecting = false, sessionReconnecting = false, sessionCopyCapable=false, copying=false;
   let relayExportSession = null;
+  let outputPush = false, outputWatch = null, outputFallbackId = null, nextOutputSubscription = 0;
   let pollTimer = null, pollRequested = false, interactiveUntil = 0, emptyPolls = 0, inputReadback = false, inputReadbackFast = false;
   function schedulePoll(delay = 0) {
     clearTimeout(pollTimer);pollTimer=null;
@@ -50,11 +51,23 @@
           let args=job.args;
           if(job.tool==='input'&&inputReadback&&panes.has(args.id)){
             args={...args,offset:panes.get(args.id).offset};
-            if(job.skipReadbackWait&&inputReadbackFast)args.waitForOutput=false;
+            if(inputReadbackFast){
+              if(job.skipReadbackWait || watchingOutput(args.id))args.waitForOutput=false;
+              else if(sessions.find(s=>s.id===args.id)?.relayEnabled)args.waitForOutput=true;
+            }
           }
-          const reply=job.tool==='__viewer'?await bridge.viewer(args):await bridge.call('terminal_session_'+job.tool,args);
+          let reply;
+          if(job.tool==='__viewer') reply=await bridge.viewer(args);
+          else if(job.tool==='__outputStart'){
+            const watch=outputWatch;
+            if(!watch || watch.subscription!==args.subscription || paused){job.resolve(null);continue;}
+            watch.offset=panes.get(args.id).offset;
+            reply=await bridge.startTerminalOutput({...args,offset:watch.offset});
+          } else if(job.tool==='__outputStop') reply=await bridge.stopTerminalOutput(args);
+          else reply=await bridge.call('terminal_session_'+job.tool,args);
           if(reply.status!=='result')throw Error('操作未完成，请检查 Aide 中的待审批提案');
-          job.resolve(reply.result);
+          const result=reply.result;
+          job.resolve(job.tool==='input'&&result?.output?.reset?{...result,requestedOutputOffset:args.offset}:result);
         } catch(error) {job.reject(error);}
         // Buffered keys enqueue from the just-settled input's promise.
         // Let that continuation run before an already queued poll takes the bridge.
@@ -81,7 +94,7 @@
       pending.skipReadbackWait ||= pending.sending || now-pending.lastKeyAt<120;
       pending.lastKeyAt=now;
       pending.text += data;
-      if (pending.text.length > 65536) { pending.text='';paused=true;message('输入过多，已暂停发送；请检查设备后重新连接工作台');return; }
+      if (pending.text.length > 65536) { pending.text='';paused=true;stopOutputWatch();message('输入过多，已暂停发送；请检查设备后重新连接工作台');return; }
       if (!pending.sending && !pending.scheduled) {
         pending.scheduled=true;
         queueMicrotask(()=>flushInput(id));
@@ -107,13 +120,13 @@
           if(end<input.length&&(input.charCodeAt(end-1)>=0xd800&&input.charCodeAt(end-1)<=0xdbff||
               sessions.find(s=>s.id===id)?.kind==='telnet'&&input[end-1]==='\r'&&input[end]==='\n'))end--;
           const result=await enqueue('input',{id,data:input.slice(start,end)},skipReadbackWait);start=end;
-          if(result.output)acceptOutput(id,result.output);
-          // The next fast input can deliver ready output without adding a poll
-          // in front of buffered keys. A final write always schedules a poll.
-          if(start===input.length&&!pending.text)schedulePoll(result.output?.data&&!result.output.more?16:0);
+          if(result.output)acceptOutput(id,result.output,result.requestedOutputOffset);
+          // Push covers the remaining echo. Legacy hosts fetch it after the
+          // final write without interleaving a poll ahead of buffered keys.
+          if(start===input.length&&!pending.text&&!watchingOutput(id))schedulePoll(result.output?.data&&!result.output.more?16:0);
         }
       }
-    } catch(error) { paused=true;for(const p of pendingInput.values())p.text='';message('输入结果待核实，不会自动重发。'+error.message); }
+    } catch(error) { paused=true;stopOutputWatch();for(const p of pendingInput.values())p.text='';message('输入结果待核实，不会自动重发。'+error.message); }
     finally {pending.sending=false;}
   }
   function scheduleGutter(id, viewport) {
@@ -122,14 +135,71 @@
     if(pane.gutterFrame)return;
     pane.gutterFrame=requestAnimationFrame(()=>{pane.gutterFrame=null;renderGutter(id,pane.gutterViewport);});
   }
-  function acceptOutput(id, output) {
+  function acceptOutput(id, output, requested) {
     const pane=panes.get(id);if(!pane||output.id!==id)return;
-    if(!output.reset&&output.offset<=pane.offset)return;
-    if(output.reset){pane.term.reset();pane.timestamps.clear();pane.term.writeln('\x1b[33m[恢复保留的输出尾部；完整记录请查看磁盘日志]\x1b[0m');}
+    // A poll that was in flight before a push may ask for an expired offset.
+    // Only reset the canvas if its response still indicates a real gap.
+    const reset=output.reset&&!(Number.isSafeInteger(requested)&&requested!==pane.offset&&output.start<=pane.offset);
+    if(!reset&&(output.offset<=pane.offset||output.start>pane.offset))return;
+    if(reset){pane.term.reset();pane.timestamps.clear();pane.term.writeln('\x1b[33m[恢复保留的输出尾部；完整记录请查看磁盘日志]\x1b[0m');}
     let data=bytes(output.data||'');
-    if(!output.reset&&Number.isInteger(output.start)&&output.start<pane.offset)data=data.subarray(pane.offset-output.start);
+    if(!reset&&Number.isInteger(output.start)&&output.start<pane.offset)data=data.subarray(pane.offset-output.start);
     if(data.length){pane.pendingTimestamp=new Date();const active=pane.term.buffer.active;pane.timestamps.set(active.baseY+active.cursorY,pane.pendingTimestamp);pane.term.write(data,()=>scheduleGutter(id));emptyPolls=0;interactiveUntil=Math.max(interactiveUntil,Date.now()+220);}
     pane.offset=output.offset;
+  }
+  function watchingOutput(id) {
+    return outputWatch?.ready===true && outputWatch.id===id;
+  }
+  function stopOutputWatch(notifyHost=true) {
+    const watch=outputWatch;
+    outputWatch=null;
+    if(notifyHost && watch && watch.offset!==null && !stopped && connected){
+      void enqueue('__outputStop',{subscription:watch.subscription}).catch(()=>{});
+    }
+  }
+  function outputWatchFailed(watch, notifyHost) {
+    if(outputWatch!==watch)return;
+    outputFallbackId=watch.id;
+    stopOutputWatch(notifyHost);
+    schedulePoll();
+  }
+  function syncOutputWatch() {
+    if(!outputPush)return;
+    const rec=current();
+    if(paused||stopped||rec?.status!=='running'||rec.kind!=='ssh'||!rec.relayEnabled){
+      stopOutputWatch();
+      if(rec?.status!=='running')outputFallbackId=null;
+      return;
+    }
+    if(outputWatch?.id===rec.id || outputFallbackId===rec.id)return;
+    stopOutputWatch();
+    const watch={id:rec.id,subscription:++nextOutputSubscription,offset:null,ready:false};
+    outputWatch=watch;
+    void enqueue('__outputStart',{id:watch.id,subscription:watch.subscription}).then(()=>{
+      if(outputWatch!==watch)return;
+      watch.ready=true;
+      schedulePoll(1500);
+    }).catch(()=>outputWatchFailed(watch,true));
+  }
+  function receiveOutputEvent(event) {
+    const watch=outputWatch;
+    if(event.protocol!==1||paused||stopped||!watch||watch.offset===null||
+        event.subscription!==watch.subscription||watch.id!==selected)return;
+    if(event.event==='terminal.output.end'||event.event==='terminal.output.closed'){
+      outputWatchFailed(watch,false);
+      return;
+    }
+    if(event.event!=='terminal.output')return;
+    const output=event.output;
+    if(!output||output.id!==watch.id||typeof output.data!=='string'||
+        !Number.isSafeInteger(output.start)||!Number.isSafeInteger(output.offset)||
+        output.start<0||output.offset<output.start||(!output.reset&&output.start!==watch.offset)){
+      outputWatchFailed(watch,true);
+      return;
+    }
+    const requested=watch.offset;
+    watch.offset=output.offset;
+    acceptOutput(watch.id,output,requested);
   }
   const displayPrefs = new Map();
   function prefsFor(id){const rec=sessions.find(s=>s.id===id);if(rec?.displaySettingsVersion===1){const prefs={lineNumbers:rec.displayLineNumbers===true,timestamps:rec.displayTimestamps===true};displayPrefs.set(id,prefs);return prefs;}if(!displayPrefs.has(id)){let prefs={lineNumbers:false,timestamps:false};try{const saved=JSON.parse(localStorage.getItem('aide.terminal.display.'+id)||'null');if(saved&&typeof saved==='object')prefs={lineNumbers:saved.lineNumbers===true,timestamps:saved.timestamps===true};}catch(_){}displayPrefs.set(id,prefs);}return displayPrefs.get(id);}
@@ -238,7 +308,8 @@
     }
   }
   function select(id) {
-    selected=id;terminal(id);render();document.body.classList.remove('sidebar-open');$('sidebar-toggle').setAttribute('aria-expanded','false');
+    if(id!==selected)outputFallbackId=null;
+    selected=id;terminal(id);syncOutputWatch();render();document.body.classList.remove('sidebar-open');$('sidebar-toggle').setAttribute('aria-expanded','false');
     requestAnimationFrame(()=>{fitSelected();panes.get(id)?.term.focus();});
     if(!paused)poll();
   }
@@ -258,24 +329,29 @@
     clearTimeout(pollTimer);pollTimer=null;
     polling=true;
     let more=false;
-    const id=selected,pane=panes.get(id);
+    const id=selected,pane=panes.get(id),offset=pane?.offset||0;
     try {
-      const result=await enqueue('poll',id?{id,offset:pane?.offset||0}:{});
+      // Keep session state fresh without competing with the output stream.
+      const result=await enqueue('poll',id&&!watchingOutput(id)?{id,offset}:{});
       const signature=JSON.stringify(sessions);sessions=result.sessions;inputReadback=result.capabilities?.inputReadback===true;inputReadbackFast=result.capabilities?.inputReadbackFast===true;sessionCopyCapable=result.capabilities?.sessionCopy===true;workspaceMode=result.workspace?.mode||'local';$('storage-path').textContent=result.storage||'.aide/terminal-workbench';$('kind').options[0].textContent=workspaceMode==='ssh'?'工作区 Shell · 已连接 SSH 主机':'工作区 Shell · Aide 本地环境';
       if(result.output&&pane) {
-        acceptOutput(id,result.output);more=!!result.output.more;
+        acceptOutput(id,result.output,offset);more=!!result.output.more;
         emptyPolls=result.output.data?0:Math.min(emptyPolls+1,4);
       }
       if(!selected&&sessions.length){select(sessions[0].id);}else if(signature!==JSON.stringify(sessions))render();
-    } catch(error) { paused=true;render();message('后台通信已暂停，已有会话可能仍在运行。'+error.message+'；请检查后重新打开工作台。'); }
+      syncOutputWatch();
+    } catch(error) { paused=true;stopOutputWatch();render();message('后台通信已暂停，已有会话可能仍在运行。'+error.message+'；请检查后重新打开工作台。'); }
     finally {
       polling=false;const immediate=pollRequested||more;pollRequested=false;
       const interactiveDelay=emptyPolls===0?16:Math.min(40,8*2**(emptyPolls-1));
-      schedulePoll(document.hidden?1000:immediate?0:Date.now()<interactiveUntil?interactiveDelay:current()?.status==='running'?180:650);
+      schedulePoll(watchingOutput(selected)?1500:document.hidden?1000:immediate?0:Date.now()<interactiveUntil?interactiveDelay:current()?.status==='running'?180:650);
     }
   }
-  $('reconnect').onclick=async()=>{paused=false;$('notice').hidden=true;await poll();render();};
-  bridge.onEvent(event=>{if(event.event==='scope.revoked'){paused=true;render();message('工作台授权已失效，请重新打开。');}});
+  $('reconnect').onclick=async()=>{paused=false;outputFallbackId=null;$('notice').hidden=true;await poll();render();};
+  bridge.onEvent(event=>{
+    if(event.event==='scope.revoked'){paused=true;stopOutputWatch(false);render();message('工作台授权已失效，请重新打开。');}
+    else receiveOutputEvent(event);
+  });
   function openCreate(){syncRelay();if($('kind').value==='serial')refreshSerial();$('create-error').textContent='';$('create-dialog').showModal();$('create-form').elements.name.focus();}
   for(const id of ['new-session','new-top','new-empty'])$(id).onclick=openCreate;
   $('cancel-create').onclick=()=>$('create-dialog').close();
@@ -592,10 +668,11 @@
   window.parent.postMessage({type:'aide.workbench.theme.ready',protocol:1},'*');
   $('graphical').onclick=openGraphical;
   $('graphical-close').onclick=closeGraphical;
-  window.addEventListener('pagehide',()=>{closeGraphical();stopped=true;clearTimeout(pollTimer);bridge.close();pendingInput.clear();});
+  window.addEventListener('pagehide',()=>{closeGraphical();stopped=true;stopOutputWatch(false);clearTimeout(pollTimer);bridge.close();pendingInput.clear();});
   render();bridge.connect().then(info=>{
     if(!['bridge.renew','daemon.detach'].every(x=>info.capabilities?.includes(x)))throw Error('请先更新 Aide：此工作台需要支持通信续期和常驻会话分离的宿主版本。');
     viewerWindow=info.capabilities.includes('viewer.window');
+    outputPush=info.capabilities.includes('terminal.output');
     connected=true;paused=false;render();return poll();
   }).catch(error=>{paused=true;render();fail(error);});
 })();
