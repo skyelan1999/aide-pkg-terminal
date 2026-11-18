@@ -9,11 +9,16 @@ test('input readback and later polls render overlapping output exactly once and 
  const output=(start,text)=>({id:'session',start,data:Buffer.from(text).toString('base64'),offset:start+Buffer.byteLength(text),reset:false});
  box.accept('session',output(0,'abc'));box.accept('session',output(0,'abc'));box.accept('session',output(0,'abcdef'));box.accept('session',{...output(6,'wrong'),id:'other'});
  assert.equal(Buffer.concat(writes).toString(),'abcdef');assert.equal(pane.offset,6);assert.equal(frames.length,1,'gutter work coalesces into one animation frame');
- box.accept('session',{...output(20,'tail'),reset:true});assert.equal(pane.term.resets,1);assert.equal(pane.offset,24);
+ box.accept('session',{...output(0,'abc'),reset:true},0);
+ assert.equal(pane.term.resets,undefined,'stale poll does not clear already pushed output');
+ box.accept('session',{...output(3,'defghi'),reset:true},0);
+ assert.equal(Buffer.concat(writes).toString(),'abcdefghi','older response contributes only unseen overlapping bytes');
+ assert.equal(pane.offset,9);
+ box.accept('session',{...output(20,'tail'),reset:true},9);assert.equal(pane.term.resets,1);assert.equal(pane.offset,24);
 });
 test('dispatch captures latest consumed offset, stays single-flight and never retries an uncertain input',async()=>{
  const calls=[],writes=[],panes=new Map([['session',{offset:12}]]);
  let active=0,max=0;
- const box={panes,sessions:[{id:'session',relayEnabled:true}],requests:{input:[{tool:'input',args:{id:'session',data:'x'},resolve:v=>writes.push(v),reject:e=>writes.push(e.message)}],normal:[]},dispatching:true,inputBurst:0,inputReadback:true,inputReadbackFast:true,stopped:false,connected:true,bridge:{async call(tool,args){active++;max=Math.max(max,active);calls.push({tool,args});active--;throw Error('ack lost after acceptance');}},Error};
+ const box={panes,watchingOutput:()=>false,sessions:[{id:'session',relayEnabled:true}],requests:{input:[{tool:'input',args:{id:'session',data:'x'},resolve:v=>writes.push(v),reject:e=>writes.push(e.message)}],normal:[]},dispatching:true,inputBurst:0,inputReadback:true,inputReadbackFast:true,stopped:false,connected:true,bridge:{async call(tool,args){active++;max=Math.max(max,active);calls.push({tool,args});active--;throw Error('ack lost after acceptance');}},Error};
  vm.runInNewContext(productionFunction('dispatch')+';globalThis.run=dispatch;',box);await box.run();assert.equal(max,1);assert.equal(calls.length,1);assert.equal(calls[0].args.offset,12);assert.equal(calls[0].args.waitForOutput,true);assert.deepEqual(writes,['ack lost after acceptance']);
 });

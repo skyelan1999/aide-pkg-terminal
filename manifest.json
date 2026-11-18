@@ -17,6 +17,7 @@
   "workbench": {
     "protocol": 1,
     "entry": "workbench.html",
+    "terminalOutput": 1,
     "title": "设备终端工作台",
     "viewer": {
       "protocol": 1

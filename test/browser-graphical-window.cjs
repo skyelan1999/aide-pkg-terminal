@@ -19,14 +19,16 @@ const sessions = [
 ];
 
 function hostPage(mode) {
+  const fixtureSessions=mode==='push'?[{...sessions[0],relayEnabled:true},sessions[1]]:sessions;
   return `<!doctype html><style>iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style>
 <iframe title="Terminal test frame" sandbox="allow-scripts allow-downloads" src="/workbench"></iframe>
 <script>
-const mode=${JSON.stringify(mode)}, sessions=${JSON.stringify(sessions)}, frame=document.querySelector('iframe');
-window.received={viewer:[],input:[]};
+const mode=${JSON.stringify(mode)}, sessions=${JSON.stringify(fixtureSessions)}, frame=document.querySelector('iframe');
+window.received={viewer:[],input:[],inputArgs:[],polls:[],outputStarts:[],outputStops:[]};
 window.addEventListener('message',event=>{
   if(event.source!==frame.contentWindow||event.data?.type!=='aide.workbench.ready')return;
   const channel=new MessageChannel();
+  window.outputEvent=event=>channel.port1.postMessage({protocol:1,...event});
   channel.port1.onmessage=e=>{
     const {requestId,method,tool,arguments:args}=e.data;
     const result={};
@@ -39,15 +41,29 @@ window.addEventListener('message',event=>{
       }
       if(mode==='blocked')result.windowOpened=false;
       result.protocol=1;result.url=${JSON.stringify(socketPath)};
+    } else if(method==='terminal.output.start'){
+      window.received.outputStarts.push(args);
+      if(mode==='push'&&window.received.outputStarts.length===1){
+        const text='REMOTE-PUSH';
+        window.outputEvent({event:'terminal.output',subscription:args.subscription,
+          output:{id:args.id,start:0,offset:text.length,reset:false,more:false,data:btoa(text)}});
+      }
+    } else if(method==='terminal.output.stop'){
+      window.received.outputStops.push(args);
     } else if(tool==='terminal_session_poll'){
-      result.sessions=sessions;result.capabilities={};
+      window.received.polls.push(args);
+      result.sessions=sessions;
+      result.capabilities=mode==='push'?{inputReadback:true,inputReadbackFast:true}:{};
+      if(mode==='push'&&window.fallbackOutput?.id===args?.id){
+        result.output=window.fallbackOutput;window.fallbackOutput=null;
+      }
     } else if(tool==='terminal_session_input'){
-      window.received.input.push(args.data);
+      window.received.input.push(args.data);window.received.inputArgs.push(args);
     }
     channel.port1.postMessage({requestId,status:'result',result});
   };
   frame.contentWindow.postMessage({type:'aide.workbench.connect',protocol:1,pluginId:'terminal',
-    capabilities:['bridge.renew','daemon.detach',...(mode==='legacy'?[]:['viewer.window'])],
+    capabilities:['bridge.renew','daemon.detach',...(mode==='legacy'?[]:['viewer.window']),...(mode==='push'?['terminal.output']:[])],
     tools:['terminal_session_poll','terminal_session_input','terminal_session_resize']
   },'*',[channel.port2]);
 },{once:false});
@@ -211,6 +227,53 @@ async function verifyMode(browser,base,mode,sockets) {
   } finally { await context.close(); }
 }
 
+async function verifyOutputPush(browser, base) {
+  const page=await browser.newPage({viewport:{width:1440,height:960}});
+  try {
+    await page.goto(base+'/?mode=push');
+    const frame=page.frameLocator('iframe[title="Terminal test frame"]');
+    await page.waitForFunction(()=>window.received.outputStarts.length===1);
+    const first=await page.evaluate(()=>window.received.outputStarts[0]);
+    assert.equal(first.id,sessions[0].id);
+    assert.equal(first.offset,0);
+    const rows=frame.locator('.terminal-pane:not([hidden]) .xterm-rows');
+    const packet=(id,start,text)=>({id,start,offset:start+Buffer.byteLength(text),reset:false,more:false,data:Buffer.from(text).toString('base64')});
+    const push=async (subscription,output)=>page.evaluate(event=>window.outputEvent(event),{event:'terminal.output',subscription,output});
+    const seeded=packet(first.id,0,'REMOTE-PUSH');
+    await rows.filter({hasText:'REMOTE-PUSH'}).waitFor();
+    const pollCount=await page.evaluate(()=>window.received.polls.filter(args=>args.id).length);
+    await frame.locator('.terminal-pane:not([hidden]) .xterm-helper-textarea').press('x');
+    await page.waitForFunction(()=>window.received.inputArgs.length===1);
+    const typed=await page.evaluate(()=>window.received.inputArgs[0]);
+    assert.equal(typed.data,'x');
+    assert.equal(typed.offset,seeded.offset);
+    assert.equal(typed.waitForOutput,false,'push uses immediate input ACK without fabricating an echo');
+    assert.equal(await page.evaluate(()=>window.received.polls.filter(args=>args.id).length),pollCount);
+    const recovered=packet(first.id,seeded.offset,'-POLL-FALLBACK');
+    await page.evaluate(({subscription,output})=>{
+      window.fallbackOutput=output;
+      window.outputEvent({event:'terminal.output.end',subscription});
+    },{subscription:first.subscription,output:recovered});
+    await rows.filter({hasText:'REMOTE-PUSH-POLL-FALLBACK'}).waitFor();
+    assert.equal(await page.evaluate(()=>window.received.outputStarts.length),1,'failed push does not spin-restart');
+    await frame.locator('#tabs button').filter({hasText:'Other shell'}).click();
+    await push(first.subscription,packet(first.id,recovered.offset,'-STALE'));
+    await frame.locator('#tabs button').filter({hasText:'X11 device'}).click();
+    await page.waitForFunction(()=>window.received.outputStarts.length===2);
+    const second=await page.evaluate(()=>window.received.outputStarts[1]);
+    assert(second.subscription>first.subscription);
+    assert.equal(second.offset,recovered.offset);
+    const next=packet(second.id,recovered.offset,'-NEW');
+    await push(second.subscription,next);
+    await rows.filter({hasText:'REMOTE-PUSH-POLL-FALLBACK-NEW'}).waitFor();
+    assert(!(await rows.textContent()).includes('STALE'));
+    await frame.locator('#tabs button').filter({hasText:'Other shell'}).click();
+    await page.waitForFunction(()=>window.received.outputStops.length===1);
+    assert.deepEqual(await page.evaluate(()=>window.received.outputStops),[{subscription:second.subscription}]);
+    console.log('PASS: relay output push, scope switching and polling fallback');
+  } finally { await page.close(); }
+}
+
 (async()=>{
   const server=http.createServer((req,res)=>{
     const url=new URL(req.url,'http://127.0.0.1');
@@ -230,7 +293,9 @@ async function verifyMode(browser,base,mode,sockets) {
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const browser=await chromium.launch({headless:true});
   try {
-    for(const mode of ['legacy','popup','blocked'])await verifyMode(browser,'http://127.0.0.1:'+server.address().port,mode,sockets);
+    const base='http://127.0.0.1:'+server.address().port;
+    for(const mode of ['legacy','popup','blocked'])await verifyMode(browser,base,mode,sockets);
+    await verifyOutputPush(browser,base);
   } finally {
     await browser.close();
     for(const socket of sockets.clients)socket.terminate();

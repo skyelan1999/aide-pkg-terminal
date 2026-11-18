@@ -7,6 +7,16 @@ const readline = require('node:readline');
 const HISTORY = 512 * 1024, PAGE = 64 * 1024, MAX_SESSIONS = 32, MAX_ACTIVE = 16;
 const LOG_BYTES = 2 * 1024 * 1024, LOG_FILES = 4;
 const ECHO_WAIT_MS = 32, RELAY_WORKBENCH_ECHO_WAIT_MS = 96, RELAY_ECHO_RETRY_MS = 1500;
+const OUTPUT_WATCH_MS = 200, MAX_OUTPUT_WAITS = 8;
+
+function waitForOutput(rec, delay) {
+  return new Promise(resolve => {
+    rec.outputWaiters ||= new Set();
+    const ready = () => { clearTimeout(timer); rec.outputWaiters.delete(ready); resolve(); };
+    const timer = setTimeout(ready, delay);
+    rec.outputWaiters.add(ready);
+  });
+}
 const relay=require('./relay/client');
 const relayProfile=require('./relay/profile');
 const net=require('node:net');
@@ -577,12 +587,7 @@ class Sessions {
       // Fast typing still sends immediately and may collect already-ready output.
       const echoWait = rec.relayEnabled && workspace?.workbench === true && args.waitForOutput === true
         ? RELAY_WORKBENCH_ECHO_WAIT_MS : ECHO_WAIT_MS;
-      await new Promise(resolve => {
-        rec.outputWaiters ||= new Set();
-        const ready = () => { clearTimeout(timer); rec.outputWaiters.delete(ready); resolve(); };
-        const timer = setTimeout(ready, echoWait);
-        rec.outputWaiters.add(ready);
-      });
+      await waitForOutput(rec, echoWait);
       // A slower relay won't supply echo in this window. Keep dispatching
       // immediately for a short period instead of repeating that delay per key.
       if(rec.relayEnabled&&rec.worker===worker&&rec.offset===requested)rec.readbackRetryAt=Date.now()+RELAY_ECHO_RETRY_MS;
@@ -610,10 +615,29 @@ class Sessions {
     return {session:this.public(rec)};
   }
   poll(workspace, args) {
+    if (args.outputWatch === true) return this.watchOutput(workspace, args);
     const space = this.space(workspace), rec = args.id ? this.get(space,args.id,workspace) : null;
     if (!rec) return this.list(workspace, space);
     const requested = integer(args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     return {...this.list(workspace, space), output:this.outputSince(rec, requested)};
+  }
+  async watchOutput(workspace, args) {
+    if (workspace?.workbench !== true || workspace.outputWatch !== true) throw Error('图形工作台回显请求未获授权');
+    if (!Number.isSafeInteger(args.offset) || args.offset < 0) throw Error('offset must be a non-negative safe integer');
+    // A live session already owns an in-memory space. Reading its output must
+    // not initialize storage, migrate records, or load a different workspace.
+    const space = this.spaces.get(workspace.stateRoot);
+    if (!space || this.stopping) throw Error('会话回显不可用');
+    const rec = this.get(space, args.id, workspace);
+    if (rec.kind !== 'ssh' || !rec.relayEnabled || rec.status !== 'running' || !rec.worker) throw Error('会话回显不可用');
+    const worker = rec.worker;
+    if (rec.offset === args.offset) {
+      if ((rec.outputWaiters?.size || 0) >= MAX_OUTPUT_WAITS) throw Error('会话回显请求繁忙');
+      await waitForOutput(rec, OUTPUT_WATCH_MS);
+    }
+    if (this.stopping || this.get(space,args.id,workspace) !== rec ||
+        rec.worker !== worker || rec.status !== 'running' || !rec.relayEnabled) throw Error('会话回显不可用');
+    return {output:this.outputSince(rec, args.offset)};
   }
   outputSince(rec, requested) {
     const start = Math.max(rec.base, Math.min(requested,rec.offset)), end = Math.min(rec.offset,start+PAGE);
