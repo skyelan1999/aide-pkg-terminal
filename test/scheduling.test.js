@@ -29,6 +29,18 @@ test('bounded input bursts allow queued background work and failures are never r
  const error=new Error('ack lost'),write=f.call('input',{data:'uncertain'});const handled=write.then(()=>assert.fail('must reject'),e=>assert.equal(e,error));await tick();f.gates.shift().reject(error);await handled;
  const next=f.call('poll',{});await tick();f.gates.shift().resolve('ok');await next;assert.equal(f.calls.filter(c=>c.args.data==='uncertain').length,1);
 });
+test('a key buffered during the previous write passes a poll already waiting for the bridge',async()=>{
+ const f=fixture();
+ const input=f.call('input',{id:'owned',data:'first'}).then(()=>f.call('input',{id:'owned',data:'buffered'}));
+ await tick();
+ const poll=f.call('poll',{id:'owned'});
+ f.gates.shift().resolve('first ACK');await tick();
+ assert.equal(f.calls[1].args.data,'buffered');
+ f.gates.shift().resolve('buffered ACK');await tick();
+ assert.equal(f.calls[2].tool,'terminal_session_poll');
+ f.gates.shift().resolve('polled');
+ await Promise.all([input,poll]);assert.equal(f.maxInFlight,1);
+});
 test('closed workbench rejects queued work without calling the bridge',async()=>{
  const f=fixture();f.ctx.stopped=true;await assert.rejects(f.call('input',{data:'x'}),/工作台已关闭/);assert.equal(f.calls.length,0);
 });

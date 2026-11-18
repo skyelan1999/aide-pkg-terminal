@@ -36,6 +36,32 @@ test('bulk input does not wait for echo and existing output can be collected wit
  const result=await f.manager.send(f.context,{id:f.rec.id,data:'X'.repeat(8192),offset:0});
  assert.equal(f.rec.outputWaiters,undefined);assert.equal(result.output.data,Buffer.from('remote').toString('base64'));assert.equal(f.writes.length,1);assert.equal(f.writes[0].length,8192);
 });
+test('steady typing can immediately read real output without waiting for a fresh echo',async t=>{
+ const f=fixture(t,{echoDelay:null});
+ assert.equal(f.manager.list(f.context).capabilities.inputReadbackFast,true);
+ await assert.rejects(async()=>f.manager.send(f.context,{id:f.rec.id,data:'wrong',offset:0,waitForOutput:'false'}),/boolean/);
+ assert.equal(f.writes.length,0);
+ const immediate=await f.manager.send(f.context,{id:f.rec.id,data:'x',offset:0,waitForOutput:false});
+ assert.equal(immediate.output.data,'');assert.equal(f.rec.outputWaiters,undefined);
+ f.manager.output(f.space,f.rec,Buffer.from('remote x'));
+ const buffered=await f.manager.send(f.context,{id:f.rec.id,data:'y',offset:0,waitForOutput:false});
+ assert.equal(Buffer.from(buffered.output.data,'base64').toString(),'remote x');
+ assert.deepEqual(f.writes.map(bytes=>bytes.toString()),['x','y']);
+});
+test('relay echo misses skip repeated waits and allow future readback attempts',async t=>{
+ const f=fixture(t,{echoDelay:null});
+ f.rec.relayEnabled=true;
+ const initial=await f.manager.send(f.context,{id:f.rec.id,data:'initial',offset:0});
+ assert.equal(initial.output.data,'');
+ const deadline=f.rec.readbackRetryAt;
+ assert(deadline>Date.now());
+ const next=await f.manager.send(f.context,{id:f.rec.id,data:'next',offset:0});
+ assert.equal(next.output.data,'');assert.equal(f.rec.readbackRetryAt,deadline);
+ f.rec.readbackRetryAt=1;
+ await f.manager.send(f.context,{id:f.rec.id,data:'retry after cooldown',offset:0});
+ assert(f.rec.readbackRetryAt>deadline);
+ assert.equal(f.writes.length,3);
+});
 test('visibility is rechecked after async input before returning output',async t=>{
  const f=fixture(t,{echoDelay:null}),ai={...f.context,workbench:false};
  const result=f.manager.send(ai,{id:f.rec.id,data:'accepted only once',offset:0});f.rec.visibleToAide=false;
