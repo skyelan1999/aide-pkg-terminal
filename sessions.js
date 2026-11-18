@@ -23,6 +23,7 @@ const net=require('node:net');
 const {Telnet}=require('./telnet');
 const {prepareX11}=require('./x11');
 const {XServers}=require('./xserver');
+const X11Capture=require('./x11-capture');
 const {Communications,data:communicationData}=require('./communications');
 const COMM_KINDS=['tcp','tcp-server','udp','serial'];
 const ID = /^[a-f0-9]{24}$/;
@@ -62,7 +63,7 @@ function inside(root, relative, directory = true) {
   return real;
 }
 class Sessions {
-  constructor() { this.spaces = new Map(); this.stopping = false; this.xservers = new XServers(); }
+  constructor() { this.spaces = new Map(); this.stopping = false; this.xservers = new XServers(); this.captures = new X11Capture(); }
   space(workspace) {
     const context = typeof workspace === 'object' && workspace ? workspace : null;
     workspace = context ? context.storageRoot : workspace;
@@ -111,7 +112,7 @@ class Sessions {
   public(rec) {
     const {copiedFrom,x11Enabled=false,x11Display,x11AuthorityFile,x11ManagedServerId,x11Unavailable,terminalType,telnetLocalEcho=false,connectionRole,multicast,visibleToAide=true,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError} = rec;
     const managed=x11ManagedServerId&&this.xservers.list().find(server=>server.serverId===x11ManagedServerId&&server.status==='running');
-    return {copiedFrom,x11Enabled,x11Display:managed?.display||x11Display,x11ConfiguredDisplay:managed?(x11Display||''):undefined,x11AuthorityFile,x11ViewerPort:managed?.viewer?.wsPort,x11ManagedServerId:managed?.serverId,x11Trusted:managed&&rec.x11Trusted||undefined,x11Unavailable,terminalType,telnetLocalEcho,copyable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',copyConnectable:!['serial','tcp-server'].includes(rec.kind),connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError,displayLineNumbers:rec.displayLineNumbers===true,displayTimestamps:rec.displayTimestamps===true,displaySettingsVersion:rec.displaySettingsVersion||0};
+    return {copiedFrom,x11Enabled,x11CaptureReady:kind==='ssh'?Boolean(managed):undefined,x11Recording:kind==='ssh'?this.captures.active(id):undefined,x11Display:managed?.display||x11Display,x11ConfiguredDisplay:managed?(x11Display||''):undefined,x11AuthorityFile,x11ViewerPort:managed?.viewer?.wsPort,x11ManagedServerId:managed?.serverId,x11Trusted:managed&&rec.x11Trusted||undefined,x11Unavailable,terminalType,telnetLocalEcho,copyable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',copyConnectable:!['serial','tcp-server'].includes(rec.kind),connectionRole,multicast,reconnectable:rec.kind!=='tcp'||!!rec.relayEnabled||connectionRole==='client',visibleToAide,relayEnabled,relayEndpoint,relayOnline,relayCheckedAt,id,name,kind,host,port,username,cwd,identityFile,identitySource,auth,devicePath,baudRate,dataBits,stopBits,parity,flowControl,bindPort,resource,cols,rows,status,createdAt,endedAt,exitCode,logging,logError,displayLineNumbers:rec.displayLineNumbers===true,displayTimestamps:rec.displayTimestamps===true,displaySettingsVersion:rec.displaySettingsVersion||0};
   }
   persist(space, rec) {
     const temporary = path.join(space.dir, rec.id + '.json.tmp');
@@ -309,7 +310,10 @@ class Sessions {
     const id=rec.x11ManagedServerId;
     delete rec.x11ManagedServerId;
     delete rec.x11Trusted;
-    if(id)await this.xservers.stop(id).catch(()=>{});
+    if(id){
+      await this.captures.stop(rec.id);
+      await this.xservers.stop(id).catch(()=>{});
+    }
   }
   async duplicate(workspace,args){
     const space=this.space(workspace),source=this.get(space,args.copyFrom,workspace);
@@ -458,7 +462,7 @@ class Sessions {
   }
   visibility(workspace,args){
     if(workspace?.workbench!==true)throw Error('可见性仅允许在工作台修改');
-    const space=this.space(workspace),rec=this.get(space,args.id,workspace);if(typeof args.visible!=='boolean')throw Error('visible 须为布尔值');rec.visibleToAide=args.visible;this.persist(space,rec);return {session:this.public(rec)};
+    const space=this.space(workspace),rec=this.get(space,args.id,workspace);if(typeof args.visible!=='boolean')throw Error('visible 须为布尔值');rec.visibleToAide=args.visible;if(!args.visible)void this.captures.stop(rec.id);this.persist(space,rec);return {session:this.public(rec)};
   }
   async relayStatus(workspace,args){
     const space=this.space(workspace),rec=this.get(space,args.id,workspace);if(!rec.relayEnabled)throw Error('此会话未启用中继');
@@ -548,7 +552,12 @@ class Sessions {
     if(!rec.port)throw Error('UDP发送需要指定目标端口');
     return comm.call('udp_send',{...values,socketId:rec.resource,host:rec.host,port:rec.port});
   }
-  async commCall(workspace,args){const space=this.space(workspace),comm=this.communication(space);const name=String(args.action||'').replace(/^terminal_/,'');
+  async commCall(workspace,args){const space=this.space(workspace);const name=String(args.action||'').replace(/^terminal_/,'');
+    if(name==='session_capture'){
+      if(workspace?.workbench!==true)throw Error('请使用指定会话的专用采集工具');
+      return this.captureSession(workspace,args.arguments||{});
+    }
+    const comm=this.communication(space);
     if(workspace?.workbench!==true&&[...space.records.values()].some(rec=>rec.visibleToAide===false))throw Error('请使用可见会话的专用工具进行操作');
     const input=args.arguments||{};
     const converted={tcp_connect:{kind:'tcp',host:input.host,port:input.port},tcp_listen:{kind:'tcp-server',port:input.port},udp_bind:{kind:'udp',port:0,bindPort:input.port,multicast:input.multicast},serial_open:{...input,kind:'serial',devicePath:input.path}}[name];
@@ -757,9 +766,54 @@ class Sessions {
       return {index,identity,data:data.subarray(0,count).toString('base64'),offset:offset+count,bytes:stat.size,more:offset+count<stat.size};
     } finally { fs.closeSync(fd); }
   }
+  async captureSession(workspace,args) {
+    const space=this.space(workspace), rec=this.get(space,args.id,workspace);
+    if(space.disabledTools.includes('terminal_session_capture'))throw Error('画面采集已被管理员禁用');
+    if(rec.kind!=='ssh')throw Error('只有 SSH 会话支持 X11 采集');
+    const dir=path.join(space.dir,'x11-captures');
+    privateDir(dir);
+    const list=()=>this.captures.list(dir,rec.id);
+    if(args.action==='list'||args.action==='status')return list();
+    if(args.action==='read'){
+      if(workspace?.workbench!==true)throw Error('请在 Terminal 工作台保存采集文件');
+      return this.captures.read(dir,rec.id,args.captureId,args.offset);
+    }
+    if(args.action==='stop'){
+      const stopped=await this.captures.stop(rec.id,true);
+      return {...list(),capture:stopped.capture};
+    }
+    if(args.action!=='screenshot'&&args.action!=='start')throw Error('采集操作无效');
+    if(workspace?.workbench!==true)text(args.purpose,'',240);
+
+    const managed=this.xservers.list().find(server=>server.serverId===rec.x11ManagedServerId&&server.status==='running');
+    const authority=managed&&this.xservers.authorityFile(managed.serverId);
+    if(this.stopping||rec.status!=='running'||!authority)throw Error('请先连接使用内置 X Server 的 SSH 会话');
+    if(managed.width*managed.height>8_500_000)throw Error('采集支持的 X11 画面最大为约 850 万像素');
+    const recording=args.action==='start';
+    const seconds=recording?integer(args.seconds,30,1,120):0;
+    const job=this.captures.start(dir,rec.id,managed.display,authority,recording?'webm':'png',seconds);
+    if(recording){
+      if(!await job.ready)throw Error((await job.done).error||'录制启动失败');
+      this.get(space,rec.id,workspace);
+      return {...list(),seconds};
+    }
+    const taken=await job.done;
+    if(taken.error)throw Error(taken.error);
+    this.get(space,rec.id,workspace);
+    const summary={...list(),capture:taken.capture};
+    if(workspace?.workbench===true)return summary;
+    const image=readPrivate(taken.file);
+    return {...summary,protocol:'plugin-tool-images-v1',source:{sessionId:rec.id,purpose:args.purpose},
+      images:[{mediaType:'image/png',dataBase64:image.toString('base64'),sha256:crypto.createHash('sha256').update(image).digest('hex')}]};
+  }
   remove(workspace, args) {
     const space=this.space(workspace), rec=this.get(space,args.id,workspace);
-    if (rec.worker||rec.reconnecting||rec.relayConnecting) throw Error('请先关闭会话，再删除记录与日志');
+    if (rec.worker||rec.reconnecting||rec.relayConnecting||this.captures.jobs.has(rec.id)) throw Error('请先关闭会话，再删除记录与日志');
+    const captureDir=path.join(space.dir,'x11-captures');
+    if(fs.existsSync(captureDir)){
+      privateDir(captureDir);
+      this.captures.clear(captureDir,rec.id);
+    }
     for (let i=0;i<LOG_FILES;i++) fs.rmSync(this.logPath(space,rec.id,i),{force:true});
     fs.rmSync(path.join(space.dir,rec.id+'.relay.json'),{force:true});
     fs.rmSync(path.join(space.dir,rec.id+'.json')); space.records.delete(rec.id);space.resources?.delete(rec.resource);
@@ -770,6 +824,7 @@ class Sessions {
   async xserverStop(_workspace, args = {}) { return this.xservers.stop(args.serverId); }
   async stop() {
     this.stopping=true;
+    await this.captures.stopAll();
     await this.xservers.stopAll();
     await Promise.allSettled([...this.spaces.values()].flatMap(space=>[...space.records.values()].filter(rec=>rec.worker).map(rec=>this.closeRecord(space,rec))));
     for(const space of this.spaces.values()){await space.communications?.close();for(const rec of space.records.values())if(rec.transport&&rec.worker){rec.worker=null;rec.status='exited';rec.endedAt=new Date().toISOString();try{this.persist(space,rec);}catch(_){}}}

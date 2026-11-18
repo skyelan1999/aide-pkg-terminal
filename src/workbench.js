@@ -247,6 +247,12 @@
     $('graphical').disabled=!connected||paused||openingGraphical||!rec?.x11ViewerPort;
     $('graphical').title=rec?.x11ViewerPort?'打开此会话的图形窗口':rec?.x11Unavailable||'图形服务尚未启动';
     if (graphicalView && !viewerSession(graphicalView.id, graphicalView.port)) closeGraphical();
+    $('capture-toggle').hidden=rec?.kind!=='ssh'||typeof rec.x11CaptureReady!=='boolean';
+    $('capture-toggle').disabled=!connected||paused;
+    $('capture-toggle').dataset.recording=String(rec?.x11Recording===true);
+    $('capture-toggle').textContent=rec?.x11Recording?'正在录制 · 管理':'截图与录制';
+    const captureCount=sessions.filter(session=>session.x11Recording===true).length;
+    if(captureCount) $('running-count').textContent+=' · '+captureCount+' 个正在录制';
     $('empty').hidden=!!rec;
     for(const id of ['new-top','new-empty','new-session'])$(id).disabled=!connected;
     for(const id of ['find','logs','logging'])$(id).disabled=!rec;
@@ -340,6 +346,11 @@
         emptyPolls=result.output.data?0:Math.min(emptyPolls+1,4);
       }
       if(!selected&&sessions.length){select(sessions[0].id);}else if(signature!==JSON.stringify(sessions))render();
+      const captureRecord=sessions.find(session=>session.id===captureSession);
+      if(captureRecord){
+        updateCaptureButtons();
+        if(!captureBusy&&Boolean(captureRecord.x11Recording)!==captureActive)void runCapture('list');
+      }
       syncOutputWatch();
     } catch(error) { paused=true;stopOutputWatch();render();message('后台通信已暂停，已有会话可能仍在运行。'+error.message+'；请检查后重新打开工作台。'); }
     finally {
@@ -495,7 +506,7 @@
     try{pendingInput.delete(rec.id);await enqueue('close',{id:rec.id});await poll();}catch(error){fail(error);}
   };
   $('delete-session').onclick=async()=>{
-    const rec=current();if(!rec||!(await confirmAction('永久删除“'+rec.name+'”的会话记录和全部日志？')))return;
+    const rec=current();if(!rec||!(await confirmAction('永久删除“'+rec.name+'”的会话记录、日志和采集文件？')))return;
     try{await enqueue('delete',{id:rec.id});panes.get(rec.id)?.term.dispose();panes.get(rec.id)?.element.remove();panes.delete(rec.id);displayPrefs.delete(rec.id);try{localStorage.removeItem('aide.terminal.display.'+rec.id);}catch(_){}sessions=sessions.filter(s=>s.id!==rec.id);selected=null;if(sessions.length)select(sessions[0].id);else render();}
     catch(error){fail(error);}
   };
@@ -649,6 +660,98 @@
     }catch(error){$('log-files').textContent=error.message;}
   };
   $('close-logs').onclick=()=>$('logs-dialog').close();
+  let captureSession=null, captureActive=false, captureBusy=false, captureExportRequest=null;
+  const captureLimit=16*1024*1024;
+  const captureNote=text=>{$('capture-status').textContent=text;};
+  const captureCall=(action,args={})=>enqueue('comm',{action:'session_capture',arguments:{id:captureSession,action,...args}});
+  function updateCaptureButtons() {
+    const rec=sessions.find(session=>session.id===captureSession);
+    const ready=rec?.x11CaptureReady===true&&!paused&&!captureBusy;
+    $('capture-shot').disabled=!ready;
+    $('capture-duration').disabled=!ready||captureActive;
+    $('capture-start').disabled=!ready||captureActive;
+    $('capture-stop').disabled=paused||captureBusy||!captureActive;
+    $('capture-close').disabled=captureBusy;
+    for(const button of $('capture-files').querySelectorAll('button'))button.disabled=paused||captureBusy;
+  }
+  async function saveCapture(file,event) {
+    if(!event.isTrusted||captureBusy||paused)return;
+    captureBusy=true;
+    captureExportRequest=null;
+    updateCaptureButtons();
+    try {
+      const output=new Uint8Array(file.bytes);
+      for(let offset=0;offset<output.length;){
+        const part=await captureCall('read',{captureId:file.id,offset});
+        const chunk=bytes(part.data);
+        if(part.name!==file.name||part.bytes!==output.length||part.offset!==offset||
+          part.nextOffset!==offset+chunk.length||!chunk.length||chunk.length>256*1024||
+          part.nextOffset>output.length)throw Error('采集文件已变化，请重新打开列表');
+        output.set(chunk,offset);
+        offset=part.nextOffset;
+        captureNote('准备下载 '+Math.round(offset/output.length*100)+'%');
+      }
+      captureExportRequest='export_'+(++exportId);
+      window.parent.postMessage({type:'aide.workbench.export',protocol:1,pluginId:'terminal',
+        requestId:captureExportRequest,name:file.name,bytes:output.buffer},'*',[output.buffer]);
+      captureNote('已准备。请点击 Aide 顶部“保存文件”。');
+    } catch(error) {captureNote(error.message);}
+    finally {captureBusy=false;updateCaptureButtons();}
+  }
+  function updateCaptureFiles(files) {
+    const list=$('capture-files');
+    list.replaceChildren();
+    for(const file of files.slice(0,12)){
+      if(!/^[a-f0-9]{24}$/.test(file?.id)||!['image/png','video/webm'].includes(file.mime)||
+        !Number.isInteger(file.bytes)||file.bytes<1||file.bytes>captureLimit||typeof file.name!=='string')continue;
+      const row=document.createElement('div');row.className='log-file';
+      const label=document.createElement('span');label.textContent=file.name+' · '+(file.bytes/1024).toFixed(1)+' KiB';
+      const button=document.createElement('button');button.type='button';button.textContent='准备下载';
+      button.addEventListener('click',event=>void saveCapture(file,event));
+      row.append(label,button);list.append(row);
+    }
+    if(!list.children.length)list.textContent='暂无采集文件';
+  }
+  async function runCapture(action,args={}) {
+    if(!captureSession||captureBusy||paused)return;
+    captureBusy=true;
+    updateCaptureButtons();
+    try {
+      const result=await captureCall(action,args);
+      if(typeof result?.active!=='boolean'||!Array.isArray(result.captures))throw Error('采集响应无效');
+      const finished=captureActive&&!result.active;
+      captureActive=result.active;
+      updateCaptureFiles(result.captures);
+      const text=captureActive?'正在录制 WebM。关闭图形窗口后仍会继续。':
+        (action==='screenshot'?'PNG 截图已生成。':action==='stop'||finished?'录制已结束。':'');
+      captureNote(result.error||text);
+    } catch(error) {captureNote(error.message);}
+    finally {captureBusy=false;updateCaptureButtons();}
+  }
+  $('capture-toggle').onclick=event=>{
+    if(!event.isTrusted||paused||captureBusy)return;
+    const rec=current();
+    if(rec?.kind!=='ssh')return;
+    captureSession=rec.id;
+    captureActive=rec.x11Recording===true;
+    captureExportRequest=null;
+    $('capture-session').textContent=rec.name;
+    $('capture-files').replaceChildren();
+    captureNote('正在读取采集文件…');
+    $('capture-dialog').showModal();
+    void runCapture('list');
+  };
+  $('capture-shot').onclick=event=>{if(event.isTrusted)void runCapture('screenshot');};
+  $('capture-start').onclick=event=>{
+    if(!event.isTrusted)return;
+    const seconds=$('capture-duration').valueAsNumber;
+    if(!Number.isInteger(seconds)||seconds<1||seconds>120){captureNote('请输入 1–120 秒之间的整数。');return;}
+    void runCapture('start',{seconds});
+  };
+  $('capture-stop').onclick=event=>{if(event.isTrusted)void runCapture('stop');};
+  $('capture-close').onclick=()=>$('capture-dialog').close();
+  $('capture-dialog').oncancel=event=>{if(captureBusy)event.preventDefault();};
+  $('capture-dialog').onclose=()=>{captureSession=null;captureActive=false;captureExportRequest=null;};
   $('session-search').oninput=render;
   for(const button of document.querySelectorAll('[data-filter]'))button.onclick=()=>{sessionFilter=button.dataset.filter;render();};
   $('sidebar-toggle').setAttribute('aria-expanded','false');
@@ -658,7 +761,10 @@
   window.addEventListener('message',event=>{
     if(event.source!==window.parent)return;
     const m=event.data;
-    if(m?.type==='aide.workbench.export.status'&&m.pluginId==='terminal'&&m.status==='error')$('log-progress').textContent=m.error;
+    if(m?.type==='aide.workbench.export.status'&&m.pluginId==='terminal'&&m.status==='error'){
+      if(captureExportRequest&&m.requestId===captureExportRequest)captureNote(m.error);
+      else $('log-progress').textContent=m.error;
+    }
     if(m?.type==='aide.workbench.theme'&&m.protocol===1){
       // Terminal stays dark for device color fidelity; surrounding chrome follows host theme.
       const colors=m.colors||{};
