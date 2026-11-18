@@ -5,7 +5,7 @@
   let sessionFilter = 'all', workspaceMode = 'local';
   let sessions = [], selected = null, polling = false, paused = true, connected = false, stopped = false, exportId = 0, relayConnecting = false, sessionReconnecting = false, sessionCopyCapable=false, copying=false;
   let relayExportSession = null;
-  let pollTimer = null, pollRequested = false, interactiveUntil = 0, emptyPolls = 0, inputReadback = false;
+  let pollTimer = null, pollRequested = false, interactiveUntil = 0, emptyPolls = 0, inputReadback = false, inputReadbackFast = false;
   function schedulePoll(delay = 0) {
     clearTimeout(pollTimer);pollTimer=null;
     if(paused||stopped)return;
@@ -22,9 +22,9 @@
   // but a bounded burst lets a waiting poll/export make progress as well.
   const requests = {input: [], normal: []};
   let dispatching = false, inputBurst = 0;
-  function enqueue(tool, args={}) {
+  function enqueue(tool, args={}, skipReadbackWait=false) {
     return new Promise((resolve,reject)=>{
-      requests[tool==='input'?'input':'normal'].push({tool,args,resolve,reject});
+      requests[tool==='input'?'input':'normal'].push({tool,args,skipReadbackWait,resolve,reject});
       if(!dispatching){dispatching=true;queueMicrotask(dispatch);}
     });
   }
@@ -47,11 +47,18 @@
           if(!connected)throw Error('当前 Aide 尚未建立所需的常驻工作台通信，请更新 Aide 后重新打开');
           // Resolve the offset at dispatch, after earlier queued polls finish.
           // Older daemons remain compatible until they advertise readback.
-          const args=job.tool==='input'&&inputReadback&&panes.has(job.args.id)?{...job.args,offset:panes.get(job.args.id).offset}:job.args;
+          let args=job.args;
+          if(job.tool==='input'&&inputReadback&&panes.has(args.id)){
+            args={...args,offset:panes.get(args.id).offset};
+            if(job.skipReadbackWait&&inputReadbackFast)args.waitForOutput=false;
+          }
           const reply=job.tool==='__viewer'?await bridge.viewer(args):await bridge.call('terminal_session_'+job.tool,args);
           if(reply.status!=='result')throw Error('操作未完成，请检查 Aide 中的待审批提案');
           job.resolve(reply.result);
         } catch(error) {job.reject(error);}
+        // Buffered keys enqueue from the just-settled input's promise.
+        // Let that continuation run before an already queued poll takes the bridge.
+        await Promise.resolve();
       }
     } finally {dispatching=false;inputBurst=0;}
   }
@@ -68,11 +75,17 @@
     term.onData(data => {
       if (paused || selected !== id || sessions.find(s=>s.id===id)?.status !== 'running'||communication(sessions.find(s=>s.id===id))) return;
       let pending = pendingInput.get(id);
-      if (!pending) { pending={text:'',timer:null,sending:false};pendingInput.set(id,pending); }
-      interactiveUntil=Date.now()+1500;emptyPolls=0;
+      if (!pending) { pending={text:'',scheduled:false,sending:false,lastKeyAt:0,skipReadbackWait:false};pendingInput.set(id,pending); }
+      const now=Date.now();
+      interactiveUntil=now+450;emptyPolls=0;
+      pending.skipReadbackWait ||= pending.sending || now-pending.lastKeyAt<120;
+      pending.lastKeyAt=now;
       pending.text += data;
       if (pending.text.length > 65536) { pending.text='';paused=true;message('输入过多，已暂停发送；请检查设备后重新连接工作台');return; }
-      if (!pending.timer) pending.timer=setTimeout(()=>flushInput(id),8);
+      if (!pending.sending && !pending.scheduled) {
+        pending.scheduled=true;
+        queueMicrotask(()=>flushInput(id));
+      }
     });
     // Do not let a terminal silently request browser clipboard access (OSC 52).
     term.parser.registerOscHandler(52,()=>true);
@@ -82,18 +95,22 @@
   }
   async function flushInput(id) {
     const pending=pendingInput.get(id);if(!pending)return;
-    pending.timer=null;if(pending.sending||paused||stopped)return;
+    pending.scheduled=false;if(pending.sending||paused||stopped)return;
     pending.sending=true;
     try {
-      while(pending.text&&!paused&&!stopped){
-        const input=pending.text;pending.text='';
+      while(pending.text&&!paused&&!stopped&&pendingInput.get(id)===pending){
+        const input=pending.text,skipReadbackWait=pending.skipReadbackWait;
+        pending.text='';pending.skipReadbackWait=false;
         for(let start=0;start<input.length;) {
-          if(paused||stopped)break;
+          if(paused||stopped||pendingInput.get(id)!==pending)break;
           let end=Math.min(start+4096,input.length);
-          if(sessions.find(s=>s.id===id)?.kind==='telnet'&&end<input.length&&((input.charCodeAt(end-1)>=0xd800&&input.charCodeAt(end-1)<=0xdbff)||(input[end-1]==='\r'&&input[end]==='\n')))end--;
-          const result=await enqueue('input',{id,data:input.slice(start,end)});start=end;
+          if(end<input.length&&(input.charCodeAt(end-1)>=0xd800&&input.charCodeAt(end-1)<=0xdbff||
+              sessions.find(s=>s.id===id)?.kind==='telnet'&&input[end-1]==='\r'&&input[end]==='\n'))end--;
+          const result=await enqueue('input',{id,data:input.slice(start,end)},skipReadbackWait);start=end;
           if(result.output)acceptOutput(id,result.output);
-          schedulePoll(result.output?.data&&!result.output.more?16:0);
+          // The next fast input can deliver ready output without adding a poll
+          // in front of buffered keys. A final write always schedules a poll.
+          if(start===input.length&&!pending.text)schedulePoll(result.output?.data&&!result.output.more?16:0);
         }
       }
     } catch(error) { paused=true;for(const p of pendingInput.values())p.text='';message('输入结果待核实，不会自动重发。'+error.message); }
@@ -111,7 +128,7 @@
     if(output.reset){pane.term.reset();pane.timestamps.clear();pane.term.writeln('\x1b[33m[恢复保留的输出尾部；完整记录请查看磁盘日志]\x1b[0m');}
     let data=bytes(output.data||'');
     if(!output.reset&&Number.isInteger(output.start)&&output.start<pane.offset)data=data.subarray(pane.offset-output.start);
-    if(data.length){pane.pendingTimestamp=new Date();const active=pane.term.buffer.active;pane.timestamps.set(active.baseY+active.cursorY,pane.pendingTimestamp);pane.term.write(data,()=>scheduleGutter(id));emptyPolls=0;interactiveUntil=Math.max(interactiveUntil,Date.now()+500);}
+    if(data.length){pane.pendingTimestamp=new Date();const active=pane.term.buffer.active;pane.timestamps.set(active.baseY+active.cursorY,pane.pendingTimestamp);pane.term.write(data,()=>scheduleGutter(id));emptyPolls=0;interactiveUntil=Math.max(interactiveUntil,Date.now()+220);}
     pane.offset=output.offset;
   }
   const displayPrefs = new Map();
@@ -244,7 +261,7 @@
     const id=selected,pane=panes.get(id);
     try {
       const result=await enqueue('poll',id?{id,offset:pane?.offset||0}:{});
-      const signature=JSON.stringify(sessions);sessions=result.sessions;inputReadback=result.capabilities?.inputReadback===true;sessionCopyCapable=result.capabilities?.sessionCopy===true;workspaceMode=result.workspace?.mode||'local';$('storage-path').textContent=result.storage||'.aide/terminal-workbench';$('kind').options[0].textContent=workspaceMode==='ssh'?'工作区 Shell · 已连接 SSH 主机':'工作区 Shell · Aide 本地环境';
+      const signature=JSON.stringify(sessions);sessions=result.sessions;inputReadback=result.capabilities?.inputReadback===true;inputReadbackFast=result.capabilities?.inputReadbackFast===true;sessionCopyCapable=result.capabilities?.sessionCopy===true;workspaceMode=result.workspace?.mode||'local';$('storage-path').textContent=result.storage||'.aide/terminal-workbench';$('kind').options[0].textContent=workspaceMode==='ssh'?'工作区 Shell · 已连接 SSH 主机':'工作区 Shell · Aide 本地环境';
       if(result.output&&pane) {
         acceptOutput(id,result.output);more=!!result.output.more;
         emptyPolls=result.output.data?0:Math.min(emptyPolls+1,4);
@@ -391,14 +408,14 @@
   $('interrupt').onclick=()=>{if(selected)enqueue('input',{id:selected,data:'\x03'}).catch(fail);};
   $('reconnect-session').onclick=async()=>{
     const rec=current();if(!rec||sessionReconnecting||rec.status==='running'||rec.status==='starting'||rec.reconnectable===false)return;
-    sessionReconnecting=true;const pending=pendingInput.get(rec.id);if(pending){clearTimeout(pending.timer);pending.timer=null;pending.text='';}render();
+    sessionReconnecting=true;pendingInput.delete(rec.id);render();
     try{const result=await enqueue('relay_connect',{id:rec.id});Object.assign(rec,result.session);select(rec.id);schedulePoll();}
     catch(error){message('重新连接失败：'+error.message);await poll();}
     finally{sessionReconnecting=false;render();}
   };
   $('close-session').onclick=async()=>{
     const rec=current();if(!rec||!(await confirmAction('结束“'+rec.name+'”的连接？正在运行的设备命令可能中断，日志会保留。')))return;
-    try{const pending=pendingInput.get(rec.id);if(pending){clearTimeout(pending.timer);pending.timer=null;pending.text='';}await enqueue('close',{id:rec.id});await poll();}catch(error){fail(error);}
+    try{pendingInput.delete(rec.id);await enqueue('close',{id:rec.id});await poll();}catch(error){fail(error);}
   };
   $('delete-session').onclick=async()=>{
     const rec=current();if(!rec||!(await confirmAction('永久删除“'+rec.name+'”的会话记录和全部日志？')))return;
@@ -575,7 +592,7 @@
   window.parent.postMessage({type:'aide.workbench.theme.ready',protocol:1},'*');
   $('graphical').onclick=openGraphical;
   $('graphical-close').onclick=closeGraphical;
-  window.addEventListener('pagehide',()=>{closeGraphical();stopped=true;clearTimeout(pollTimer);bridge.close();for(const p of pendingInput.values())clearTimeout(p.timer);});
+  window.addEventListener('pagehide',()=>{closeGraphical();stopped=true;clearTimeout(pollTimer);bridge.close();pendingInput.clear();});
   render();bridge.connect().then(info=>{
     if(!['bridge.renew','daemon.detach'].every(x=>info.capabilities?.includes(x)))throw Error('请先更新 Aide：此工作台需要支持通信续期和常驻会话分离的宿主版本。');
     viewerWindow=info.capabilities.includes('viewer.window');

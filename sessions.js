@@ -6,6 +6,7 @@ const {spawn} = require('node:child_process');
 const readline = require('node:readline');
 const HISTORY = 512 * 1024, PAGE = 64 * 1024, MAX_SESSIONS = 32, MAX_ACTIVE = 16;
 const LOG_BYTES = 2 * 1024 * 1024, LOG_FILES = 4;
+const ECHO_WAIT_MS = 32, RELAY_ECHO_RETRY_MS = 1500;
 const relay=require('./relay/client');
 const relayProfile=require('./relay/profile');
 const net=require('node:net');
@@ -153,7 +154,7 @@ class Sessions {
   }
   list(workspace) {
     const space = this.space(workspace);
-    return {capabilities:{inputReadback:true,sessionCopy:workspace?.sessionCopyVersion===1},workspace:{mode:space.remote?'ssh':'local',host:space.remote?.host,path:space.remote?.path},sessions:[...space.records.values()].filter(rec=>workspace?.workbench===true||rec.visibleToAide!==false).map(rec => this.public(rec)), storage:workspace?.stateRoot?'Aide 私有会话存储（按工作区隔离）':space.remote?'Aide 数据目录 / terminal-workspaces/<工作区标识>/.aide/terminal-workbench':'.aide/terminal-workbench', limits:{sessions:MAX_SESSIONS,active:MAX_ACTIVE,logBytes:LOG_BYTES,logFiles:LOG_FILES}};
+    return {capabilities:{inputReadback:true,inputReadbackFast:true,sessionCopy:workspace?.sessionCopyVersion===1},workspace:{mode:space.remote?'ssh':'local',host:space.remote?.host,path:space.remote?.path},sessions:[...space.records.values()].filter(rec=>workspace?.workbench===true||rec.visibleToAide!==false).map(rec => this.public(rec)), storage:workspace?.stateRoot?'Aide 私有会话存储（按工作区隔离）':space.remote?'Aide 数据目录 / terminal-workspaces/<工作区标识>/.aide/terminal-workbench':'.aide/terminal-workbench', limits:{sessions:MAX_SESSIONS,active:MAX_ACTIVE,logBytes:LOG_BYTES,logFiles:LOG_FILES}};
   }
   async create(workspace, args, existing) {
     if (this.stopping) throw Error('后台正在停止');
@@ -393,6 +394,7 @@ class Sessions {
     if(!this.public(rec).reconnectable)throw Error('TCP 接入会话不能主动重连，请重新启动对应监听并等待设备接入；旧版未记录方向的 TCP 会话请新建客户端');
     const stored={...this.public(rec),x11Display:rec.x11Display};
     space.resources?.delete(rec.resource);rec.transport=null;
+    delete rec.readbackRetryAt;
     rec.reconnecting=true;rec.status='starting';delete rec.endedAt;delete rec.exitCode;
     try {
       this.output(space,rec,Buffer.from('\r\n[重新连接 · '+new Date().toISOString()+']\r\n'));
@@ -546,6 +548,7 @@ class Sessions {
     return comm.call(name,values);
   }
   send(workspace, args) {
+    if (args.waitForOutput !== undefined && typeof args.waitForOutput !== 'boolean') throw Error('waitForOutput must be boolean');
     if (args.offset !== undefined) {
       // Validate before any input can execute. A readback failure must never
       // turn invalid parameters into a partly accepted write.
@@ -557,18 +560,23 @@ class Sessions {
     return this.sendInput(workspace, args);
   }
   async sendWithOutput(workspace, rec, args, requested) {
+    const worker=rec.worker;
     const result = await this.sendInput(workspace, args);
     // One short bounded wait may return a remote echo in the input ACK,
     // removing a second host RPC. Never wait on bulk paste or communication
     // packets, and never infer an echo from the bytes we just sent.
-    if (['local','workspace','ssh','telnet'].includes(rec.kind) &&
+    if (args.waitForOutput !== false && !(rec.relayEnabled&&rec.readbackRetryAt>Date.now()) &&
+        ['local','workspace','ssh','telnet'].includes(rec.kind) &&
         Buffer.byteLength(args.data) <= 256 && rec.offset === requested && !this.stopping) {
       await new Promise(resolve => {
         rec.outputWaiters ||= new Set();
         const ready = () => { clearTimeout(timer); rec.outputWaiters.delete(ready); resolve(); };
-        const timer = setTimeout(ready, 32);
+        const timer = setTimeout(ready, ECHO_WAIT_MS);
         rec.outputWaiters.add(ready);
       });
+      // A slower relay won't supply echo in this window. Keep dispatching
+      // immediately for a short period instead of repeating that delay per key.
+      if(rec.relayEnabled&&rec.worker===worker&&rec.offset===requested)rec.readbackRetryAt=Date.now()+RELAY_ECHO_RETRY_MS;
     }
     // A stale/invisible target must not expose output after an async write.
     this.get(this.space(workspace), args.id, workspace);
