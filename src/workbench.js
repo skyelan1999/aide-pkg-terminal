@@ -142,7 +142,7 @@
     $('connection-kind').textContent=rec?rec.kind.toUpperCase():'TERMINAL';
     $('detail-state').textContent=rec?(labels[rec.status]||rec.status):'尚未连接';
     $('detail-state').style.color=running?'var(--positive)':'var(--muted)';
-    $('detail-kind').textContent=rec?(kinds[rec.kind]||rec.kind)+(rec.x11Enabled?' / X11 已请求':rec.x11Unavailable?' / X11 不可用':'')+(rec.copiedFrom?' / 副本':'')+(rec.relayEnabled?' · 中继模式':''):'—';
+    $('detail-kind').textContent=rec?(kinds[rec.kind]||rec.kind)+(rec.x11Unavailable?' / X11 不可用':rec.x11Trusted?' / X11 · OpenGL':rec.x11Enabled?' / X11 已请求':'')+(rec.copiedFrom?' / 副本':'')+(rec.relayEnabled?' · 中继模式':''):'—';
     $('session-visible').disabled=!rec||paused;$('session-visible').checked=!!rec&&rec.visibleToAide!==false;
     $('relay-export-status').hidden = !rec || relayExportSession !== rec.id;
     $('relay-actions').hidden=!rec?.relayEnabled;$('relay-online').textContent=rec?.relayEnabled?'中继 '+(rec.relayOnline==='online'?'在线':rec.relayOnline==='offline'?'离线':'状态未知')+' · '+rec.relayEndpoint:'';for(const id of ['relay-probe','relay-script','relay-export','relay-connect'])$(id).disabled=!rec||paused||(id==='relay-connect'&&(running||relayConnecting));
@@ -156,8 +156,12 @@
     const graphical=!!rec&&rec.kind==='ssh'&&rec.x11Enabled;
     $('graphical').hidden=!graphical;
     $('graphical').disabled=!connected||paused||!rec?.x11ViewerPort;
-    $('graphical').title=rec?.x11ViewerPort?'在 Aide 内打开受管 X display 的图形窗口':'图形服务尚未启动';
-    if(graphical&&connected&&!paused&&rec.status==='running'&&rec.x11ViewerPort&&!graphicalAttempted.has(rec.id)){graphicalAttempted.add(rec.id);queueMicrotask(()=>{if(selected===rec.id&&$('graphical-pane').hidden)openGraphical();});}
+    $('graphical').title=rec?.x11ViewerPort?'在 Aide 内打开此会话的图形窗口':rec?.x11Unavailable||'图形服务尚未启动';
+    if (graphicalSessionId && !rec?.x11ViewerPort) closeGraphical();
+    if(graphical&&connected&&!paused&&rec.status==='running'&&rec.x11ViewerPort&&graphicalAttempted.get(rec.id)!==rec.x11ViewerPort){
+      graphicalAttempted.set(rec.id,rec.x11ViewerPort);
+      queueMicrotask(()=>{if(selected===rec.id&&$('graphical-pane').hidden)openGraphical();});
+    }
     $('empty').hidden=!!rec;
     for(const id of ['new-top','new-empty','new-session'])$(id).disabled=!connected;
     for(const id of ['find','logs','logging'])$(id).disabled=!rec;
@@ -175,8 +179,8 @@
     $('log-status').style.color=rec?.logError?'var(--danger)':'';
     let displayChanged=false;for(const [id,pane] of panes){const prefs=prefsFor(id),signature=prefs.lineNumbers+':'+prefs.timestamps;if(pane.displaySignature!==signature){applyDisplayPrefs(id,pane);if(id===selected)displayChanged=true;}pane.element.hidden=id!==selected;pane.term.options.disableStdin=paused||sessions.find(s=>s.id===id)?.status!=='running';}if(displayChanged)requestAnimationFrame(fitSelected);
   }
-  let rfb = null, graphicalSessionId = null, graphicalClipboard = '';
-  const graphicalAttempted = new Set();
+  let rfb = null, graphicalSessionId = null, graphicalClipboard = '', graphicalRequest = 0;
+  const graphicalAttempted = new Map();
   async function writeBrowserClipboard(text) {
     try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
     const area = document.createElement('textarea');area.value = text;area.setAttribute('readonly','');area.style.position='fixed';area.style.left='-9999px';document.body.append(area);area.select();
@@ -184,18 +188,22 @@
     area.remove();return ok;
   }
   function closeGraphical() {
-    if (rfb) { try { rfb.disconnect(); } catch (_) {} rfb = null; }
+    graphicalRequest++;
+    const client=rfb;rfb=null;
+    if (client) { try { client.disconnect(); } catch (_) {} }
     graphicalSessionId = null;graphicalClipboard = '';
     $('graphical-pane').hidden = true;$('graphical-copy').hidden = true;
-    $('graphical-screen').replaceChildren();
+    $('graphical-screen').onpaste=null;$('graphical-screen').replaceChildren();
   }
   async function openGraphical() {
     const rec = current();
     if (!rec || rec.kind !== 'ssh' || !rec.x11Enabled) return message('当前会话未启用 X11 图形转发');
     if (!rec.x11ViewerPort) return message('图形窗口服务未就绪：请确认运行环境包含 x11vnc 与 websockify，然后重新连接会话');
     if (typeof AideTerminalRFB !== 'function') return message('图形组件未加载，请重新打开工作台');
+    const request=++graphicalRequest,port=rec.x11ViewerPort;
     try {
-      const granted = await enqueueViewer({ port: rec.x11ViewerPort });
+      const granted = await enqueueViewer({ port });
+      if(request!==graphicalRequest||selected!==rec.id||current()?.x11ViewerPort!==port)return;
       const url = new URL(granted.url, location.href);
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
       closeGraphical();
@@ -203,31 +211,33 @@
       $('graphical-pane').hidden = false;
       $('graphical-state').textContent = '正在连接 ' + rec.x11Display;
       const screen = $('graphical-screen');
-      rfb = new AideTerminalRFB(screen, url.toString(), { credentials: { password: '' }, scaleViewport: true, clipViewport: false, focusOnClick: true });
-      rfb.addEventListener('connect', () => {
-        $('graphical-state').textContent = rec.x11Display + ' · 图形已连接 · 远程剪贴板可用';
+      const client = new AideTerminalRFB(screen, url.toString(), { credentials: { password: '' }, scaleViewport: true, clipViewport: false, focusOnClick: true });
+      rfb=client;
+      client.addEventListener('connect', () => {
+        if(rfb!==client)return;
+        $('graphical-state').textContent = rec.x11Display + ' · 图形已连接 · 远程剪贴板可用（手动复制）';
         screen.focus();
-        if (rfb && rfb.focusOnClick !== undefined) rfb.focusOnClick = true;
+        if (client.focusOnClick !== undefined) client.focusOnClick = true;
       });
-      rfb.addEventListener('disconnect', event => {
+      client.addEventListener('disconnect', event => {
+        if(rfb!==client)return;
         $('graphical-state').textContent = '图形窗口已断开' + (event.detail?.clean === false ? '（连接异常）' : '');
-        rfb = null;
+        rfb = null;graphicalClipboard='';$('graphical-copy').hidden=true;screen.onpaste=null;
       });
-      rfb.addEventListener('clipboard', event => {
+      client.addEventListener('clipboard', event => {
         const text = event.detail?.text;
-        if (typeof text !== 'string') return;
+        if (rfb!==client||typeof text !== 'string') return;
         graphicalClipboard = text;
         $('graphical-copy').hidden = false;
-        writeBrowserClipboard(text).catch(() => {});
       });
       screen.onpaste = event => {
         const text = event.clipboardData?.getData('text');
-        if (text && rfb) { rfb.clipboardPasteFrom(text); event.preventDefault(); }
+        if (text && rfb===client) { client.clipboardPasteFrom(text); event.preventDefault(); }
       };
-    } catch (error) { closeGraphical(); fail(error); }
+    } catch (error) { if(request===graphicalRequest||graphicalSessionId===rec.id){closeGraphical();fail(error);} }
   }
   function select(id) {
-    if (graphicalSessionId && graphicalSessionId !== id) closeGraphical();
+    if (selected !== id) closeGraphical();
     selected=id;terminal(id);render();document.body.classList.remove('sidebar-open');$('sidebar-toggle').setAttribute('aria-expanded','false');
     requestAnimationFrame(()=>{fitSelected();panes.get(id)?.term.focus();});
     if(!paused)poll();
@@ -469,7 +479,7 @@
     applyDisplayPrefs(rec.id);
     value('set-host',rec.host);value('set-port',rec.port);value('set-username',rec.username);$('set-auth').value=rec.auth||'default';
     value('set-identity-source',rec.identitySource);value('set-identity-file',rec.identityFile);$('set-identity').hidden=$('set-auth').value!=='key';
-    $('set-x11').checked=!!rec.x11Enabled;$('set-x11-fields').hidden=!rec.x11Enabled;value('set-x11-display',rec.x11Display);value('set-x11-authority',rec.x11AuthorityFile);
+    $('set-x11').checked=!!rec.x11Enabled;$('set-x11-fields').hidden=!rec.x11Enabled;value('set-x11-display',rec.x11ConfiguredDisplay??rec.x11Display);value('set-x11-authority',rec.x11AuthorityFile);
     value('set-terminal-type',rec.terminalType||'xterm-256color');$('set-telnet-echo').checked=!!rec.telnetLocalEcho;
     value('set-bind-port',rec.bindPort||0);$('set-multicast').checked=!!rec.multicast;
     value('set-device-path',rec.devicePath);value('set-baud',rec.baudRate||115200);$('set-data-bits').value=String(rec.dataBits||8);$('set-stop-bits').value=String(rec.stopBits||1);$('set-parity').value=rec.parity||'none';$('set-flow').checked=!!rec.flowControl;
@@ -493,7 +503,7 @@
       textChange('set-username','username');const auth=$('set-auth').value;if(auth!==(rec.auth||'default'))args.auth=auth;
       if(auth==='key'){textChange('set-identity-source','identitySource');textChange('set-identity-file','identityFile');if(!$('set-identity-file').value.trim())errors.push('私钥认证需要填写私钥文件');}
       if($('set-x11').checked!==!!rec.x11Enabled)args.x11Enabled=$('set-x11').checked;
-      if($('set-x11').checked){const display=$('set-x11-display').value.trim(),authority=$('set-x11-authority').value.trim();if(display!==String(rec.x11Display||''))args.x11Display=display;if(authority!==String(rec.x11AuthorityFile||''))args.x11AuthorityFile=authority;}
+      if($('set-x11').checked){const display=$('set-x11-display').value.trim(),authority=$('set-x11-authority').value.trim();if(display!==String(rec.x11ConfiguredDisplay??rec.x11Display??''))args.x11Display=display;if(authority!==String(rec.x11AuthorityFile||''))args.x11AuthorityFile=authority;}
     }
     if(rec.kind==='telnet'){textChange('set-terminal-type','terminalType');boolChange('set-telnet-echo','telnetLocalEcho');}
     if(rec.kind==='udp'){numChange('set-bind-port','bindPort');boolChange('set-multicast','multicast');}
@@ -581,7 +591,7 @@
   });
   window.parent.postMessage({type:'aide.workbench.theme.ready',protocol:1},'*');
   $('graphical').onclick=openGraphical;
-  $('graphical-copy').onclick=async()=>{if(!graphicalClipboard)return;const ok=await writeBrowserClipboard(graphicalClipboard);$('graphical-state').textContent=ok?'已复制远程剪贴板':'复制被浏览器拒绝，请在画面中手动选择';};
+  $('graphical-copy').onclick=async()=>{if(!graphicalClipboard)return;const client=rfb;const ok=await writeBrowserClipboard(graphicalClipboard);if(rfb===client)$('graphical-state').textContent=ok?'已复制远程剪贴板':'复制被浏览器拒绝，请在画面中手动选择';};
   $('graphical-close').onclick=closeGraphical;
   window.addEventListener('pagehide',()=>{closeGraphical();stopped=true;clearTimeout(pollTimer);bridge.close();for(const p of pendingInput.values())clearTimeout(p.timer);});
   render();bridge.connect().then(info=>{
