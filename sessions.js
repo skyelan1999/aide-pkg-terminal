@@ -774,6 +774,16 @@ class Sessions {
     privateDir(dir);
     const list=()=>this.captures.list(dir,rec.id);
     if(args.action==='list'||args.action==='status')return list();
+    if(args.action==='frames'){
+      if(workspace?.workbench===true)throw Error('请通过 Aide 的视觉任务分析录像关键帧');
+      const count=integer(args.frameCount,4,1,4);
+      const startMs=integer(args.startMs,0,0,150000);
+      const endMs=integer(args.endMs,-1,-1,150000);
+      if(endMs!==-1&&endMs<startMs)throw Error('录像时间范围无效');
+      const evidence=await this.captures.frames(dir,rec.id,args.captureId,count,startMs,endMs);
+      this.get(space,rec.id,workspace);
+      return evidence;
+    }
     if(args.action==='read'){
       if(workspace?.workbench!==true)throw Error('请在 Terminal 工作台保存采集文件');
       return this.captures.read(dir,rec.id,args.captureId,args.offset);

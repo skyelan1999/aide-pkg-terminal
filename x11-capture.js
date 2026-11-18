@@ -3,18 +3,23 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const {spawn} = require('node:child_process');
+const {execFile, spawn} = require('node:child_process');
+const {promisify} = require('node:util');
 
 const ARTIFACT = /^[a-f0-9]{24}$/;
 const VIDEO_LIMIT = 15 << 20;
 const PNG_LIMIT = 2 << 20;
 const CHUNK = 256 << 10;
 const MAX_RECORDINGS = 2;
+const extractFrames = promisify(execFile);
+const FRAME_BYTES_LIMIT = 900 * 1024;
+const PNG_HEADER = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
 
 class X11Capture {
   constructor() {
     this.jobs = new Map();
     this.errors = new Map();
+    this.frameReaders = 0;
   }
 
   active(session) {
@@ -29,12 +34,12 @@ class X11Capture {
       mime:kind === 'webm' ? 'video/webm' : 'image/png', bytes:stat.size, createdAt:stat.mtime.toISOString()};
   }
 
-  list(dir, session) {
+  list(dir, session, kind) {
     const results = [];
     for (const name of fs.readdirSync(dir)) {
       if (!name.startsWith(session + '-')) continue;
       const match = /^([a-f0-9]{24})\.(png|webm)$/.exec(name.slice(session.length + 1));
-      if (!match) continue;
+      if (!match || (kind && match[2] !== kind)) continue;
       const found = this.artifact(dir, session, match[1], match[2]);
       if (found) {
         const {file, ...metadata} = found;
@@ -43,6 +48,45 @@ class X11Capture {
     }
     return {active:this.active(session), captures:results.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,20),
       error:this.errors.get(session)};
+  }
+
+  async frames(dir, session, id, count, startMs, endMs) {
+    if (id === undefined) id = this.list(dir, session, 'webm').captures[0]?.id;
+    if (typeof id !== 'string' || !ARTIFACT.test(id)) throw Error('请提供有效的录像编号或先完成一段 X11 录像');
+    const capture = this.artifact(dir, session, id, 'webm');
+    if (!capture) throw Error('当前会话没有该录像');
+    if (this.frameReaders >= 2) throw Error('同时最多分析两段 X11 录像');
+    this.frameReaders++;
+    try {
+      const {stdout} = await extractFrames('python3',
+        [path.join(__dirname,'x11-frames.py'),capture.file,String(count),String(startMs),String(endMs)],
+        {timeout:15000, maxBuffer:5 << 20});
+      const {durationMs, frames} = JSON.parse(stdout);
+      if (!Number.isInteger(durationMs) || durationMs < 1 ||
+          !Array.isArray(frames) || !frames.length || frames.length > count) throw Error();
+      let last = -1;
+      const metadata = [], images = [];
+      for (const {timeMs, width, height, dataBase64} of frames) {
+        if (!Number.isInteger(timeMs) || timeMs <= last || timeMs >= durationMs || timeMs < startMs ||
+            (endMs !== -1 && timeMs > endMs) || typeof dataBase64 !== 'string') throw Error();
+        const png = Buffer.from(dataBase64,'base64');
+        if (png.length < 24 || png.length > FRAME_BYTES_LIMIT ||
+            !png.subarray(0,16).equals(PNG_HEADER) ||
+            png.readUInt32BE(16)!==width || png.readUInt32BE(20)!==height ||
+            width < 1 || height < 1 || width*height > 4_000_000) throw Error();
+        const sha256 = crypto.createHash('sha256').update(png).digest('hex');
+        metadata.push({index:metadata.length + 1,timeMs,width,height,bytes:png.length,sha256});
+        images.push({mediaType:'image/png',dataBase64:png.toString('base64'),sha256});
+        last=timeMs;
+      }
+      return {protocol:'plugin-tool-images-v1',source:{sessionId:session,captureId:id,durationMs},
+        frames:metadata,images};
+    } catch (error) {
+      if (error.stderr?.trim() === 'no-frames') throw Error('该时间范围内没有录像画面');
+      throw Error('无法从该 X11 录像中读取关键帧');
+    } finally {
+      this.frameReaders--;
+    }
   }
 
   read(dir, session, id, offset=0) {

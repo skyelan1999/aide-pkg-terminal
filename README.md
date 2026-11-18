@@ -1,6 +1,6 @@
 # Terminal · Aide 设备终端工作台
 
-**1.8.9 候选，实际发行状态以 GitHub Release 为准。** 图形窗口需要配套 Aide 宿主提供 viewer 代理与 Xvfb、x11vnc、openbox、websockify。基础功能兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织。
+**1.8.10 候选，实际发行状态以 GitHub Release 为准。** 图形窗口需要配套 Aide 宿主提供 viewer 代理与 Xvfb、x11vnc、openbox、websockify。基础功能兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织。
 
 ## 中继交互性能（1.8.1）
 
@@ -12,7 +12,7 @@
 
 ## 安装与兼容
 
-1.8.9 的版本归档位于 `packages/v1.8.9/aide-pkg-terminal-v1.8.9.zip`，同目录提供 `SHA256SUMS`。导入前校验 `sha256sum -c SHA256SUMS`，然后在 Aide 的已安装插件详情中选择 ZIP 升级。历史版本可从 [GitHub Releases](https://github.com/skyelan1999/aide-pkg-terminal/releases) 获取。
+1.8.10 的版本归档位于 `packages/v1.8.10/aide-pkg-terminal-v1.8.10.zip`，同目录提供 `SHA256SUMS`。导入前校验 `sha256sum -c SHA256SUMS`，然后在 Aide 的已安装插件详情中选择 ZIP 升级。历史版本可从 [GitHub Releases](https://github.com/skyelan1999/aide-pkg-terminal/releases) 获取。
 
 需要 **Aide v0.1.18.0-RC3+**。市场元数据最低版本为 `0.1.18.0 RC3`，不提供降低门槛的 sourceCompatibility；旧 RC1 不应自动升级至此版本。手动 ZIP 导入不经过市场门槛，请先升级宿主。运行时 `sessionCopyVersion=1` 仍作复制入口二次检查。归档不打包 xauth/X Server，部署前提见下方说明。历史1.5.3归档保持不变。
 
@@ -26,7 +26,9 @@
 
 采集结果保存在当前工作区的 Terminal 私有数据区。在最近采集列表点「保存」后，点击 Aide 顶部的保存按钮导出。删除会话会同时删除私有采集记录。配套 Linux Aide 容器提供 Pillow 的 XCB 和 WebP 支持，无需配置系统录屏权限。
 
-Aide 可按授权可见的会话调用 `terminal_session_capture`，包括 `screenshot`、`start`、`stop`、`status` 和 `list`。`screenshot` 和 `start` 需要提供采集目的。截图可交给支持图片的模型。视频在工作台保存。
+Aide 可按授权可见的会话调用 `terminal_session_capture`，包括 `screenshot`、`start`、`stop`、`status`、`list` 和 `frames`。`screenshot` 和 `start` 需要提供采集目的。截图可交给支持图片的模型。视频在工作台保存。
+
+录像完成后，Aide 可自动调用 `frames`，把录像的代表性画面和相对时间戳传给视觉模型。默认从同一会话最近完成的 WebM 中取最多四帧，按时间从早到晚返回。可用 `captureId` 指定其他录像，用 `startMs`、`endMs` 限定区间，或用 `frameCount` 调整取样数量。抽帧使用录制中的时间分布，保留所选区间内的首尾画面及中间取样点。支持由 1.8.9 及更新版本的 Terminal 生成的 VP8 WebM。模型可对比这些画面描述可见变化。
 
 
 直连和中继 SSH 的「自动启用图形窗口」都为会话分配独立、带认证的 X Server，支持 RViz 等 OpenGL 应用。远端应用可以访问该会话的专用画面，请核对 SSH 主机指纹。外部 DISPLAY 和自定义 Xauthority 继续使用受限转发。剪贴板需手动复制或粘贴。
