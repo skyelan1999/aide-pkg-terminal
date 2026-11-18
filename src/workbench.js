@@ -30,8 +30,10 @@
   }
   function enqueueViewer(args={}) {
     return new Promise((resolve,reject)=>{
-      requests.normal.push({tool:'__viewer',args,resolve,reject});
-      if(!dispatching){dispatching=true;queueMicrotask(dispatch);}
+      // A popup needs the user's live browser activation. Start immediately
+      // when idle and pass queued background polls without breaking single-flight.
+      requests.normal.unshift({tool:'__viewer',args,resolve,reject});
+      if(!dispatching){dispatching=true;void dispatch();}
     });
   }
   async function dispatch() {
@@ -155,13 +157,9 @@
     $('output-mode').textContent=rec?(running?'实时输出':'保留的会话输出'):'等待连接';$('display-settings').disabled=!rec;
     const graphical=!!rec&&rec.kind==='ssh'&&rec.x11Enabled;
     $('graphical').hidden=!graphical;
-    $('graphical').disabled=!connected||paused||!rec?.x11ViewerPort;
-    $('graphical').title=rec?.x11ViewerPort?'在 Aide 内打开此会话的图形窗口':rec?.x11Unavailable||'图形服务尚未启动';
-    if (graphicalSessionId && !rec?.x11ViewerPort) closeGraphical();
-    if(graphical&&connected&&!paused&&rec.status==='running'&&rec.x11ViewerPort&&graphicalAttempted.get(rec.id)!==rec.x11ViewerPort){
-      graphicalAttempted.set(rec.id,rec.x11ViewerPort);
-      queueMicrotask(()=>{if(selected===rec.id&&$('graphical-pane').hidden)openGraphical();});
-    }
+    $('graphical').disabled=!connected||paused||openingGraphical||!rec?.x11ViewerPort;
+    $('graphical').title=rec?.x11ViewerPort?'打开此会话的图形窗口':rec?.x11Unavailable||'图形服务尚未启动';
+    if (graphicalView && !viewerSession(graphicalView.id, graphicalView.port)) closeGraphical();
     $('empty').hidden=!!rec;
     for(const id of ['new-top','new-empty','new-session'])$(id).disabled=!connected;
     for(const id of ['find','logs','logging'])$(id).disabled=!rec;
@@ -179,65 +177,50 @@
     $('log-status').style.color=rec?.logError?'var(--danger)':'';
     let displayChanged=false;for(const [id,pane] of panes){const prefs=prefsFor(id),signature=prefs.lineNumbers+':'+prefs.timestamps;if(pane.displaySignature!==signature){applyDisplayPrefs(id,pane);if(id===selected)displayChanged=true;}pane.element.hidden=id!==selected;pane.term.options.disableStdin=paused||sessions.find(s=>s.id===id)?.status!=='running';}if(displayChanged)requestAnimationFrame(fitSelected);
   }
-  let rfb = null, graphicalSessionId = null, graphicalClipboard = '', graphicalRequest = 0;
-  const graphicalAttempted = new Map();
-  async function writeBrowserClipboard(text) {
-    try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
-    const area = document.createElement('textarea');area.value = text;area.setAttribute('readonly','');area.style.position='fixed';area.style.left='-9999px';document.body.append(area);area.select();
-    let ok = false;try { ok = document.execCommand('copy'); } catch (_) {}
-    area.remove();return ok;
-  }
+  let graphicalView = null, openingGraphical = false, graphicalRequest = 0, viewerWindow = false;
+  const viewerSession = (id,port) => sessions.some(row=>row.id===id&&row.status==='running'&&row.x11ViewerPort===port);
   function closeGraphical() {
     graphicalRequest++;
-    const client=rfb;rfb=null;
-    if (client) { try { client.disconnect(); } catch (_) {} }
-    graphicalSessionId = null;graphicalClipboard = '';
-    $('graphical-pane').hidden = true;$('graphical-copy').hidden = true;
-    $('graphical-screen').onpaste=null;$('graphical-screen').replaceChildren();
+    graphicalView?.disconnect();
+    graphicalView = null;
+    const pane=$('graphical-pane');
+    pane.hidden=true;
+    pane.parentElement.classList.remove('graphical-visible');
   }
-  async function openGraphical() {
+  async function openGraphical(event) {
+    if(!event.isTrusted||openingGraphical)return;
     const rec = current();
     if (!rec || rec.kind !== 'ssh' || !rec.x11Enabled) return message('当前会话未启用 X11 图形转发');
-    if (!rec.x11ViewerPort) return message('图形窗口服务未就绪：请确认运行环境包含 x11vnc 与 websockify，然后重新连接会话');
-    if (typeof AideTerminalRFB !== 'function') return message('图形组件未加载，请重新打开工作台');
+    if (!rec.x11ViewerPort) return message('图形窗口服务尚未就绪');
     const request=++graphicalRequest,port=rec.x11ViewerPort;
+    let openingPane=false;
+    openingGraphical=true;
+    $('graphical').disabled=true;
     try {
-      const granted = await enqueueViewer({ port });
-      if(request!==graphicalRequest||selected!==rec.id||current()?.x11ViewerPort!==port)return;
-      const url = new URL(granted.url, location.href);
-      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      const granted = await enqueueViewer(viewerWindow?{port,openInWindow:true}:{port});
+      if(request!==graphicalRequest||!viewerSession(rec.id,port))return;
+      if(granted?.protocol!==1)throw Error('图形窗口响应无效');
       closeGraphical();
-      graphicalSessionId = rec.id;
-      $('graphical-pane').hidden = false;
-      $('graphical-state').textContent = '正在连接 ' + rec.x11Display;
-      const screen = $('graphical-screen');
-      const client = new AideTerminalRFB(screen, url.toString(), { credentials: { password: '' }, scaleViewport: true, clipViewport: false, focusOnClick: true });
-      rfb=client;
-      client.addEventListener('connect', () => {
-        if(rfb!==client)return;
-        $('graphical-state').textContent = rec.x11Display + ' · 图形已连接 · 远程剪贴板可用（手动复制）';
-        screen.focus();
-        if (client.focusOnClick !== undefined) client.focusOnClick = true;
+      if(granted.windowOpened===true)return;
+      const pane=$('graphical-pane');
+      openingPane=true;
+      pane.hidden=false;
+      pane.parentElement.classList.add('graphical-visible');
+      $('graphical-title').textContent=rec.name;
+      $('graphical-title').title=rec.name;
+      const disconnect=AideTerminalViewer.connect(granted.url,{
+        screen:$('graphical-screen'),state:$('graphical-state'),copy:$('graphical-copy'),
       });
-      client.addEventListener('disconnect', event => {
-        if(rfb!==client)return;
-        $('graphical-state').textContent = '图形窗口已断开' + (event.detail?.clean === false ? '（连接异常）' : '');
-        rfb = null;graphicalClipboard='';$('graphical-copy').hidden=true;screen.onpaste=null;
-      });
-      client.addEventListener('clipboard', event => {
-        const text = event.detail?.text;
-        if (rfb!==client||typeof text !== 'string') return;
-        graphicalClipboard = text;
-        $('graphical-copy').hidden = false;
-      });
-      screen.onpaste = event => {
-        const text = event.clipboardData?.getData('text');
-        if (text && rfb===client) { client.clipboardPasteFrom(text); event.preventDefault(); }
-      };
-    } catch (error) { if(request===graphicalRequest||graphicalSessionId===rec.id){closeGraphical();fail(error);} }
+      graphicalView={id:rec.id,port,disconnect};
+    } catch (error) {
+      if(openingPane)closeGraphical();
+      if(openingPane||request===graphicalRequest)fail(error);
+    } finally {
+      openingGraphical=false;
+      render();
+    }
   }
   function select(id) {
-    if (selected !== id) closeGraphical();
     selected=id;terminal(id);render();document.body.classList.remove('sidebar-open');$('sidebar-toggle').setAttribute('aria-expanded','false');
     requestAnimationFrame(()=>{fitSelected();panes.get(id)?.term.focus();});
     if(!paused)poll();
@@ -591,11 +574,11 @@
   });
   window.parent.postMessage({type:'aide.workbench.theme.ready',protocol:1},'*');
   $('graphical').onclick=openGraphical;
-  $('graphical-copy').onclick=async()=>{if(!graphicalClipboard)return;const client=rfb;const ok=await writeBrowserClipboard(graphicalClipboard);if(rfb===client)$('graphical-state').textContent=ok?'已复制远程剪贴板':'复制被浏览器拒绝，请在画面中手动选择';};
   $('graphical-close').onclick=closeGraphical;
   window.addEventListener('pagehide',()=>{closeGraphical();stopped=true;clearTimeout(pollTimer);bridge.close();for(const p of pendingInput.values())clearTimeout(p.timer);});
   render();bridge.connect().then(info=>{
     if(!['bridge.renew','daemon.detach'].every(x=>info.capabilities?.includes(x)))throw Error('请先更新 Aide：此工作台需要支持通信续期和常驻会话分离的宿主版本。');
+    viewerWindow=info.capabilities.includes('viewer.window');
     connected=true;paused=false;render();return poll();
   }).catch(error=>{paused=true;render();fail(error);});
 })();

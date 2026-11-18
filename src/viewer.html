@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminal 图形窗口</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#0b1018;color:#e1e9f5;font:14px system-ui,sans-serif}
+body{display:flex;flex-direction:column}
+header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;background:#142034;border-bottom:1px solid #26344a}
+header strong{font-weight:600}
+#viewer-state{margin-right:auto;color:#a2b4cc}
+button{border:1px solid #425472;background:#19283e;color:inherit;padding:5px 10px;border-radius:5px;cursor:pointer}
+button:focus-visible{outline:2px solid #8db2f9;outline-offset:2px}
+#viewer-screen{flex:1;min-height:0;min-width:0;overflow:hidden;background:#000}
+</style>
+<body>
+<header>
+  <strong>Terminal 图形窗口</strong>
+  <span id="viewer-state" role="status">正在连接图形窗口</span>
+  <button id="viewer-copy" type="button" hidden>复制远程剪贴板</button>
+  <button id="viewer-close" type="button">关闭窗口</button>
+</header>
+<main id="viewer-screen" aria-label="远程画面"></main>
+<script>/* NOVNC_JS */</script>
+<script>/* GRAPHICAL_VIEWER_JS */</script>
+<script>/* VIEWER_JS */</script>
+</body>
+</html>
