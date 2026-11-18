@@ -1,6 +1,6 @@
 # Terminal · Aide 设备终端工作台
 
-**1.8.1；实际发行状态以 GitHub Release 为准。** 图形窗口需要同步构建的 Aide 宿主（内含 viewer ticket 代理与 xvfb/x11vnc/openbox/websockify）；在旧宿主上 SSH 仍可用，但不会出现图形窗口。基础功能仍兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
+**1.8.2 候选；实际发行状态以 GitHub Release 为准。** 图形窗口需要同步构建的 Aide 宿主（内含 viewer ticket 代理与 xvfb/x11vnc/openbox/websockify）；在旧宿主上 SSH 仍可用，但不会出现图形窗口。基础功能仍兼容 **v0.1.18.0-RC3 或更高版本**。统一 Shell、SSH、Telnet、TCP、UDP 与串口调试工作台，提供常驻会话和日志，交互参考 [WindTerm](https://github.com/kingToolbox/WindTerm) 的会话列表、标签和日志组织；没有复用 WindTerm 源码。
 
 ## 中继交互性能（1.8.1）
 
@@ -12,7 +12,7 @@
 
 ## 安装与兼容
 
-以 [v1.8.0 Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.8.0) 是否公开为发行状态依据。正式归档位于 `packages/v1.8.0/aide-pkg-terminal-v1.8.0.zip` 和同目录 `SHA256SUMS`；发布后从 Release 说明的固定提交链接下载，校验 `sha256sum -c SHA256SUMS` 后导入。仅出现仓库文件或本段说明不表示已公开发行。
+1.8.2 的版本归档位于 `packages/v1.8.2/aide-pkg-terminal-v1.8.2.zip`，同目录提供 `SHA256SUMS`。导入前校验 `sha256sum -c SHA256SUMS`，然后在 Aide 的已安装插件详情中选择 ZIP 升级。已发布的 1.8.1 可从其 [GitHub Release](https://github.com/skyelan1999/aide-pkg-terminal/releases/tag/v1.8.1) 获取。
 
 需要 **Aide v0.1.18.0-RC3+**。市场元数据最低版本为 `0.1.18.0 RC3`，不提供降低门槛的 sourceCompatibility；旧 RC1 不应自动升级至此版本。手动 ZIP 导入不经过市场门槛，请先升级宿主。运行时 `sessionCopyVersion=1` 仍作复制入口二次检查。归档不打包 xauth/X Server，部署前提见下方说明。历史1.5.3归档保持不变。
 
@@ -29,6 +29,10 @@
 中继客户端关闭 TCP 小包合并；重新下载并运行 1.4.1 或更新版本的 Python 脚本还可应用设备侧相同优化。旧脚本继续兼容。实际回显速度仍取决于网络和设备。
 
 在配套 Aide 中启用 Terminal，点击“打开工作台”，选择“新建会话”。“工作区 Shell”在本地工作区使用 Aide 本地 PTY；在 SSH 工作区则复用 Aide 已认证的工作区 SSH 连接，并进入远程工作区目录。新建的“远程 SSH · 设备连接”由 **Aide 运行环境**的 OpenSSH 客户端连接目标设备。可以同时调试不同设备，切换标签或关闭工作台不会结束后台会话。点击“结束”并确认才结束连接，保留原有日志；已结束的会话可以明确删除记录和日志。
+
+中继会话可点击 **备份中继配置 .base64**，再从 Aide 顶部保存 `aide-relay-<会话ID>.v1.base64`。会话记录丢失后，在 **新建会话 → 加载中继配置** 选择备份，核对填入的参数并保存。随后可连接仍在运行的原有中继。加载只填充草稿，连接由用户另行发起。
+
+备份包含 Aide 到中继的地址、端口和密钥，以及设备连接参数。文件名标注版本和 Base64 编码，密钥仅在文件内容中。请把备份当作凭据私下保管。设备的 SSH 密码、私钥内容和终端历史保留在原有各自的位置。跨工作区恢复时，SSH 私钥文件引用需要在目标工作区可用。设备侧依旧使用已有的 `.py` 部署脚本。
 
 SSH 首次连接在终端显示主机指纹，请通过可信途径核对后输入 `yes`。指纹变化由 OpenSSH 拒绝连接；本插件不会自动忽略校验。认证方式可选默认身份、用户名和密码、私钥文件。密码和加密私钥口令在终端提示后输入；记录只保存用户名、地址、端口、认证方式与私钥文件位置，不保存密码和口令。私钥可手动填写当前来源内的相对路径，或点击“从工作区 / 引用选择…”浏览当前工作区以及已启用、允许访问的本地、Skill、SFTP、工作区 SFTP 引用来源。私钥内容由宿主限量读取，经 daemon 私有通道交给 Linux 内存文件，不传给网页、不加入工具参数或连接记录，也不新增私钥磁盘副本。原始私钥文件仍由用户管理。没有启用 agent 转发、端口转发，也不会读取用户 SSH config 的 ProxyCommand。
 

@@ -31,7 +31,7 @@ module.exports = {
     add('terminal_session_logs','分页读取指定会话磁盘日志（base64），返回轮转文件身份',run('logs'),{...id,index:{type:'integer'},offset:{type:'integer'},identity:{type:'string'}},['id']);
     add('terminal_session_delete','永久删除已结束会话的记录与日志，须用户明确要求',run('remove'),id,['id']);
     add('terminal_session_visibility','仅工作台用户可修改会话对 Aide 的可见性',run('visibility'),{...id,visible:{type:'boolean'}},['id','visible']);
-    add('terminal_session_relay_script','仅工作台用户可下载包含密钥的设备侧中继 Python 脚本',run('relayScript'),id,['id']);
+    add('terminal_session_relay_script','仅工作台用户可下载包含中继密钥的部署脚本或可恢复配置文件',run('relayScript'),{...id,format:{type:'string',enum:['deploy','profile']}},['id']);
     add('terminal_session_relay_status','检测可见会话的加密中继是否在线，不打开目标设备',run('relayStatus'),id,['id']);
     add('terminal_session_relay_connect','按保存的配置连接或重新连接已有会话（包括中继）；仅在用户明确要求时调用，保留记录与日志',run('reconnect'),{...id,identityFile:{type:'string'},identitySource:{type:'string'}},['id']);
     const definitions=require('./communications').definitions();

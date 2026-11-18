@@ -16,6 +16,61 @@ test('configured Python TLS relay transfers TCP bytes, probes without opening ta
  assert.throws(()=>f.m.send(f.ai,{id:f.rec.id,data:'secret'}),/不存在/);assert.throws(()=>f.m.logs(f.ai,{id:f.rec.id}),/不存在/);await assert.rejects(f.m.commCall(f.ai,{action:'tcp_close',arguments:{}}),/可见会话/);
  f.m.visibility(f.ui,{id:f.rec.id,visible:true});assert.equal(f.m.list(f.ai).sessions.length,1);await f.m.send(f.ai,{id:f.rec.id,data:'VISIBLE'});await received(f.m,f.ui,f.rec.id,'56 49 53 49 42 4c 45');assert(!JSON.stringify(f.m.list(f.ai)).includes(f.key));assert(!fs.existsSync(path.join(f.root,'.aide','terminal-workbench')));await f.m.close(f.ui,{id:f.rec.id});f.m.remove(f.ui,{id:f.rec.id});assert(!fs.existsSync(path.join(f.m.space(f.ui).dir,f.rec.id+'.relay.json')));
 });
+test('workbench Base64 backup restores relay settings without an old session or device deployment', async t => {
+ const f = await fixture(t, 'tcp', {host:'127.0.0.1',port:23232});
+ const profileCodec = require('../relay/profile');
+ assert.throws(() => f.m.relayScript(f.ai, {id:f.rec.id,format:'profile'}), /工作台/);
+ const result = f.m.relayScript(f.ui, {id:f.rec.id,format:'profile'});
+ assert.equal(result.name, 'aide-relay-' + f.rec.id + '.v1.base64');
+ assert(!result.name.includes(f.key));
+ assert(f.m.relayScript(f.ui, {id:f.rec.id}).name.endsWith('.py'));
+ const encoded = Buffer.from(result.data, 'base64').toString('ascii');
+ const original = f.config();
+ const profile = profileCodec.decode(encoded);
+ assert.deepEqual(profile.relay, {host:original.host,port:original.port,key:original.key});
+ assert.deepEqual(profile.target, original.target);
+ for (const invalid of ['not a backup', 'A'.repeat(profileCodec.maxBytes + 1),
+   Buffer.from(JSON.stringify({...profile,version:2})).toString('base64'),
+   Buffer.from(JSON.stringify({...profile,relay:{...profile.relay,key:'wrong'}})).toString('base64')]) {
+  assert.throws(() => profileCodec.decode(invalid), /中继配置/);
+ }
+
+ // The relay process predates both the session deletion and reload.
+ await f.start();
+ f.m.remove(f.ui, {id:f.rec.id});
+ const restored = (await f.m.create(f.ui, {...profile.target,name:profile.name,
+   logging:profile.logging,visibleToAide:profile.visibleToAide,
+   relay:{...profile.relay,enabled:true}})).session;
+ assert.notEqual(restored.id, f.rec.id);
+ assert.equal(restored.status, 'waiting');
+ assert.equal(restored.visibleToAide, false);
+ assert.equal(f.m.relayConfig(f.m.space(f.ui), f.m.get(f.m.space(f.ui), restored.id, f.ui)).id, original.id);
+ assert.equal((await f.m.relayStatus(f.ui, {id:restored.id})).session.relayOnline, 'online');
+ assert(!JSON.stringify(f.m.list(f.ui)).includes(f.key));
+});
+
+test('relay backup preserves supported connection settings and excludes SSH credential material', () => {
+ const codec = require('../relay/profile');
+ const key = crypto.randomBytes(32).toString('base64');
+ const record = {name:'中继配置',cwd:'.',logging:false,visibleToAide:false};
+ const cases = [
+  {kind:'ssh',host:'device.test',port:2222,username:'operator',auth:'key',
+   identitySource:'fixture-source',identityFile:'keys/device',x11Enabled:true,
+   x11Display:':1',x11AuthorityFile:'keys/Xauthority'},
+  {kind:'telnet',host:'device.test',port:2323,terminalType:'vt100',telnetLocalEcho:true},
+  {kind:'tcp',host:'device.test',port:1234},
+  {kind:'udp',host:'device.test',port:5678},
+  {kind:'serial',devicePath:'/dev/ttyUSB0',baudRate:19200,dataBits:7,stopBits:1.5,parity:'even',flowControl:true},
+ ];
+ for (const target of cases) {
+  const conf = {host:'relay.test',port:17780,key,target:{...target,password:'do not include',privateKey:'do not include'}};
+  const profile = codec.fromRecord({...record,kind:target.kind}, conf);
+  assert(!JSON.stringify(profile).includes('do not include'));
+  assert.deepEqual(codec.decode(Buffer.from(JSON.stringify(profile)).toString('base64')), profile);
+  assert.deepEqual(profile.target, target);
+ }
+});
+
 test('UDP datagram boundaries and binary data survive TCP/TLS relay framing',async t=>{
  const server=dgram.createSocket('udp4');await new Promise(r=>server.bind(0,'127.0.0.1',r));server.on('message',(data,r)=>server.send(data,r.port,r.address));t.after(()=>server.close());const f=await fixture(t,'udp',{host:'127.0.0.1',port:server.address().port});await f.start();await f.m.relayConnect(f.ui,{id:f.rec.id});await f.m.send(f.ui,{id:f.rec.id,data:'00 ff',format:'hex'});await f.m.send(f.ui,{id:f.rec.id,data:'41 42',format:'hex'});await received(f.m,f.ui,f.rec.id,'00 ff');await received(f.m,f.ui,f.rec.id,'41 42');await f.m.close(f.ui,{id:f.rec.id});
 });
