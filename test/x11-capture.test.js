@@ -48,6 +48,19 @@ test('X11 capture binds the managed display, workspace, visibility and file owne
   const part=await manager.captureSession(ui,{id:first,action:'read',captureId,offset:2});
   assert.equal(part.data,png.subarray(2).toString('base64'));
   assert.equal(part.nextOffset,png.length);
+  await assert.rejects(manager.captureSession(ai,{id:second,action:'frames',captureId}),/不存在/);
+  await assert.rejects(manager.captureSession(ui,{id:first,action:'frames',captureId}),/Aide 的视觉任务/);
+  await assert.rejects(manager.captureSession(ai,{id:first,action:'frames',frameCount:5}),/1–4/);
+  await assert.rejects(manager.captureSession(ai,{id:first,action:'frames',startMs:500,endMs:400}),/录像时间范围无效/);
+  await assert.rejects(manager.captureSession(ai,{id:first,action:'frames',captureId}),/没有该录像/);
+  manager.captures.frames=async (dir, session, clip, count, start, end) => {
+    assert.equal(path.basename(dir),'x11-captures');
+    assert.deepEqual([session,clip,count,start,end],[first,captureId,3,125,1000]);
+    return {frames:[{timeMs:125}]};
+  };
+  assert.deepEqual(await manager.captureSession(ai,{
+    id:first,action:'frames',captureId,frameCount:3,startMs:125,endMs:1000
+  }),{frames:[{timeMs:125}]});
   const other=fs.mkdtempSync(path.join(root,'another-'));
   await assert.rejects(manager.captureSession({storageRoot:other,workbench:true},{id:first,action:'list'}),/不存在/);
 });

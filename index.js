@@ -13,6 +13,7 @@ module.exports = {
       if(method==='create'&&args.copyFrom&&api.terminalContext?.sessionCopyVersion!==1)throw Error('Session copy requires an updated Aide host');
       sessions ||= new (require('./sessions').Sessions)();
       if (method === 'files') { if (!api.terminalContext?.fileListing) throw Error('引用私钥选择需要更新配套 Aide 宿主'); return api.terminalContext.fileListing; }
+      if (method === 'list') return sessions.list(api.terminalContext);
       return sessions[method](api.terminalContext || api.workspaceRoot,args);
     };
     const id={id:{type:'string'}};
@@ -28,7 +29,14 @@ module.exports = {
     add('terminal_session_display','保存会话行号和时间戳显示设置，并将之后记录的日志行加上已启用标记',run('display'),{...id,lineNumbers:{type:'boolean'},timestamps:{type:'boolean'}},['id','lineNumbers','timestamps']);
     add('terminal_session_configure','修改已有会话的手动配置。连接目标等配置在下次手动重连时生效；不会自动重连或中断当前会话。中继密钥只写入私有配置，不会从工具结果返回。',run('configure'),{...id,name:{type:'string'},cwd:{type:'string'},host:{type:'string'},port:{type:'integer'},username:{type:'string'},auth:{type:'string',enum:['default','password','key']},identityFile:{type:'string'},identitySource:{type:'string'},devicePath:{type:'string'},baudRate:{type:'integer'},dataBits:{type:'integer'},stopBits:{type:'number'},parity:{type:'string',enum:['none','even','odd','mark','space']},flowControl:{type:'boolean'},bindPort:{type:'integer'},multicast:{type:'boolean'},terminalType:{type:'string'},telnetLocalEcho:{type:'boolean'},x11Enabled:{type:'boolean'},x11Display:{type:'string'},x11AuthorityFile:{type:'string'},cols:{type:'integer'},rows:{type:'integer'},logging:{type:'boolean'},visibleToAide:{type:'boolean'},displayLineNumbers:{type:'boolean'},displayTimestamps:{type:'boolean'},relay:{type:'object',properties:{enabled:{type:'boolean'},host:{type:'string'},port:{type:'integer'},key:{type:'string'}}}},['id']);
     add('terminal_session_read','按行号或时间范围读取现有会话日志；默认最多返回100行，最多500行且128 KiB，适合分段读取避免占用过多上下文。',run('read'),{...id,fromLine:{type:'integer'},toLine:{type:'integer'},fromTime:{type:'string'},toTime:{type:'string'},limit:{type:'integer'}},['id']);
-    add('terminal_session_capture','截图或录制指定、对 Aide 可见的 SSH 受管 X11 画面。截图会作为视觉证据交给支持图像的模型，成品可在 Terminal 工作台保存。只在用户明确要求采集时调用 screenshot 或 start，并给出具体采集目的。',run('captureSession'),{...id,action:{type:'string',enum:['screenshot','start','stop','status','list']},seconds:{type:'integer',minimum:1,maximum:120},purpose:{type:'string',maxLength:240}},['id','action']);
+    add('terminal_session_capture','查看指定、对 Aide 可见的 SSH X11 画面。screenshot 查看当前 PNG，start/stop 录制 WebM，frames 对已完成的录像按时间自动抽取最多四张图供视觉模型比较。图像顺序与 frames 的相对毫秒时间戳一致。只在用户明确要求采集时截图或开始录制，并说明用途。',run('captureSession'),{
+      ...id,action:{type:'string',enum:['screenshot','start','stop','status','list','frames']},
+      seconds:{type:'integer',minimum:1,maximum:120},purpose:{type:'string',maxLength:240},
+      captureId:{type:'string',pattern:'^[a-f0-9]{24}$',description:'分析的录像编号，省略时使用同一会话最近完成的录像'},
+      frameCount:{type:'integer',minimum:1,maximum:4,description:'按时间排序返回的最大图片数，默认 4'},
+      startMs:{type:'integer',minimum:0,maximum:150000,description:'相对录像开始的时间，默认 0 毫秒'},
+      endMs:{type:'integer',minimum:0,maximum:150000,description:'相对录像开始的结束时间，省略时采样到结尾'}
+    },['id','action']);
     add('terminal_session_logs','分页读取指定会话磁盘日志（base64），返回轮转文件身份',run('logs'),{...id,index:{type:'integer'},offset:{type:'integer'},identity:{type:'string'}},['id']);
     add('terminal_session_delete','永久删除已结束会话的记录、日志与私有采集文件，须用户明确要求',run('remove'),id,['id']);
     add('terminal_session_visibility','仅工作台用户可修改会话对 Aide 的可见性',run('visibility'),{...id,visible:{type:'boolean'}},['id','visible']);
